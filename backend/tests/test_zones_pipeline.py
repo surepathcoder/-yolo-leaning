@@ -171,10 +171,7 @@ def test_update_and_delete_a_zone(client, db_session, ctx):
     assert updated["name"] == "Back store"
     assert updated["loitering_threshold_seconds"] == 45
 
-    assert (
-        client.delete(f"/api/v1/zones/{zone['id']}", headers=ctx["headers"]).status_code
-        == 200
-    )
+    assert client.delete(f"/api/v1/zones/{zone['id']}", headers=ctx["headers"]).status_code == 200
     assert client.get("/api/v1/zones", headers=ctx["headers"]).json() == []
     # Soft-deleted, not destroyed: the events it produced still reference it.
     assert db_session.get(Zone, uuid.UUID(zone["id"])) is not None
@@ -199,10 +196,7 @@ def test_zones_are_isolated_between_tenants(client, ctx):
     ).json()
 
     assert client.get("/api/v1/zones", headers=other_headers).json() == []
-    assert (
-        client.get(f"/api/v1/zones/{zone['id']}", headers=other_headers).status_code
-        == 404
-    )
+    assert client.get(f"/api/v1/zones/{zone['id']}", headers=other_headers).status_code == 404
 
 
 def test_viewer_cannot_draw_zones(client, db_session, ctx):
@@ -279,10 +273,7 @@ def test_update_and_delete_a_line(client, ctx):
     assert updated["invert_direction"] is True
     assert updated["cooldown_seconds"] == 5.0
 
-    assert (
-        client.delete(f"/api/v1/lines/{line['id']}", headers=ctx["headers"]).status_code
-        == 200
-    )
+    assert client.delete(f"/api/v1/lines/{line['id']}", headers=ctx["headers"]).status_code == 200
     assert client.get("/api/v1/lines", headers=ctx["headers"]).json() == []
 
 
@@ -362,9 +353,7 @@ def test_a_synthetic_pipeline_produces_events_and_alerts(client, db_session, ctx
         headers=ctx["headers"],
     )
 
-    started = client.post(
-        f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"]
-    )
+    started = client.post(f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"])
     assert started.status_code == 200, started.text
 
     # The synthetic source yields 60 frames; poll rather than sleeping blind.
@@ -397,29 +386,21 @@ def test_a_synthetic_pipeline_produces_events_and_alerts(client, db_session, ctx
 @pytest.mark.slow
 def test_starting_a_pipeline_twice_is_rejected(client, ctx):
     camera_id = ctx["camera"]["id"]
-    first = client.post(
-        f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"]
-    )
+    first = client.post(f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"])
     assert first.status_code == 200
     try:
-        second = client.post(
-            f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"]
-        )
+        second = client.post(f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"])
         assert second.status_code == 409
         assert second.json()["error"]["code"] == "CAMERA_ALREADY_RUNNING"
     finally:
-        client.post(
-            f"/api/v1/cameras/{camera_id}/pipeline/stop", headers=ctx["headers"]
-        )
+        client.post(f"/api/v1/cameras/{camera_id}/pipeline/stop", headers=ctx["headers"])
 
 
 def test_starting_a_disabled_camera_is_rejected(client, ctx):
     camera_id = ctx["camera"]["id"]
     client.post(f"/api/v1/cameras/{camera_id}/disable", headers=ctx["headers"])
 
-    response = client.post(
-        f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"]
-    )
+    response = client.post(f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"])
     assert response.status_code == 502
     assert "disabled" in response.json()["error"]["message"].lower()
 
