@@ -43,6 +43,7 @@ const NAV_SECTIONS: { heading: string; items: NavItem[] }[] = [
       { to: "/stores", label: "Stores", permission: "store:read" },
       { to: "/cameras", label: "Cameras", permission: "camera:read" },
       { to: "/zones", label: "Zones & lines", permission: "zone:read" },
+      { to: "/inventory", label: "Inventory", permission: "inventory:read" },
     ],
   },
   {

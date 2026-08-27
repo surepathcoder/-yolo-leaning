@@ -503,3 +503,114 @@ export type RealtimeMessage =
         at: ISODateTime;
       };
     };
+
+// ----------------------------------------------------------------- inventory
+export type OccupancyLevel = "FULL" | "NORMAL" | "LOW" | "EMPTY" | "UNKNOWN";
+
+export type InventoryEventType =
+  | "PRODUCT_REMOVED"
+  | "PRODUCT_RETURNED"
+  | "LOW_STOCK"
+  | "SHELF_EMPTY"
+  | "SHELF_CHANGED"
+  | "SHELF_RESTOCKED";
+
+export interface Product {
+  id: UUID;
+  organization_id: UUID;
+  sku: string;
+  name: string;
+  brand: string | null;
+  category: string | null;
+  barcode: string | null;
+  unit: string;
+  description: string | null;
+  unit_price: string | null;
+  currency: string;
+  detection_class_name: string | null;
+  image_path: string | null;
+  low_stock_threshold: number | null;
+  is_active: boolean;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+}
+
+export interface Shelf {
+  id: UUID;
+  organization_id: UUID;
+  store_id: UUID;
+  camera_id: UUID | null;
+  name: string;
+  code: string;
+  location: string | null;
+  polygon: number[][] | null;
+  baseline_occupancy: number | null;
+  low_threshold: number;
+  empty_threshold: number;
+  sample_interval_seconds: number;
+  monitoring_enabled: boolean;
+  is_active: boolean;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
+  products: Product[];
+}
+
+/**
+ * A shelf's latest known state.
+ *
+ * `occupancy_ratio` is null when the shelf has never been read in a usable
+ * frame. That is deliberately distinct from "read as empty", and the UI must
+ * not collapse the two -- an unmonitored shelf shown as 0% is a lie.
+ */
+export interface ShelfStatus {
+  shelf_id: UUID;
+  name: string;
+  code: string;
+  camera_id: UUID | null;
+  monitoring_enabled: boolean;
+  occupancy_ratio: number | null;
+  occupancy_level: OccupancyLevel;
+  confidence: number | null;
+  is_occluded: boolean;
+  last_reading_at: ISODateTime | null;
+}
+
+export interface InventorySummary {
+  shelves_total: number;
+  shelves_monitored: number;
+  shelves_low: number;
+  shelves_empty: number;
+  shelves_unknown: number;
+  products_total: number;
+  events_24h: number;
+}
+
+export interface InventorySnapshot {
+  id: UUID;
+  shelf_id: UUID;
+  camera_id: UUID | null;
+  occupancy_ratio: number;
+  occupancy_level: OccupancyLevel;
+  confidence: number;
+  is_occluded: boolean;
+  product_counts: Record<string, number>;
+  detected_object_count: number | null;
+  snapshot_path: string | null;
+  captured_at: ISODateTime;
+  method: string;
+}
+
+export interface InventoryEvent {
+  id: UUID;
+  shelf_id: UUID;
+  camera_id: UUID | null;
+  product_id: UUID | null;
+  event_type: InventoryEventType;
+  quantity_delta: number | null;
+  confidence: number;
+  occupancy_before: number | null;
+  occupancy_after: number | null;
+  track_key: string | null;
+  occurred_at: ISODateTime;
+  event_metadata: Record<string, unknown>;
+}

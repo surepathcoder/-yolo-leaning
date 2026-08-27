@@ -24,6 +24,7 @@ import { AnalyticsPage } from "@/pages/Analytics";
 import { CamerasPage } from "@/pages/Cameras";
 import { DashboardPage } from "@/pages/Dashboard";
 import { EventsPage } from "@/pages/Events";
+import { InventoryPage } from "@/pages/Inventory";
 import { LiveViewPage } from "@/pages/LiveView";
 import { LoginPage } from "@/pages/Login";
 import { StoresPage } from "@/pages/Stores";
@@ -95,7 +96,8 @@ function AppRoutes() {
         <Route path="/live" element={<LiveViewPage />} />
         <Route path="/stores" element={<StoresPage />} />
         <Route path="/cameras" element={<CamerasPage />} />
-        <Route path="/zones" element={<ZonesPage />} />
+        <Route path="/inventory" element={<InventoryPage />} />
+            <Route path="/zones" element={<ZonesPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
         <Route path="/system" element={<SystemPage />} />
       </Route>

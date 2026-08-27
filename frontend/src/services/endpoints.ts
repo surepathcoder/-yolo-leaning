@@ -21,14 +21,21 @@ import type {
   EventTypeInfo,
   FalsePositiveReport,
   HealthResponse,
+  InventoryEvent,
+  InventoryEventType,
+  InventorySnapshot,
+  InventorySummary,
   LoginResponse,
   OperatingHours,
   Page,
   PipelineStatus,
   PlanSummary,
+  Product,
   RegisterResponse,
   SessionInfo,
   Severity,
+  Shelf,
+  ShelfStatus,
   Store,
   StoreSummary,
   Tokens,
@@ -237,3 +244,41 @@ export async function fetchHealth(): Promise<HealthResponse> {
   if (!response.ok) throw new Error(`health check failed: ${response.status}`);
   return (await response.json()) as HealthResponse;
 }
+
+// ----------------------------------------------------------------- inventory
+export const inventoryApi = {
+  products: (params?: { category?: string; search?: string; include_inactive?: boolean }) =>
+    api.get<Product[]>("/products", params),
+
+  createProduct: (payload: Record<string, unknown>) => api.post<Product>("/products", payload),
+
+  updateProduct: (id: UUID, payload: Record<string, unknown>) =>
+    api.patch<Product>(`/products/${id}`, payload),
+
+  removeProduct: (id: UUID) => api.delete<{ message: string }>(`/products/${id}`),
+
+  shelves: (params?: { store_id?: UUID; camera_id?: UUID }) =>
+    api.get<Shelf[]>("/shelves", params),
+
+  createShelf: (payload: Record<string, unknown>) => api.post<Shelf>("/shelves", payload),
+
+  updateShelf: (id: UUID, payload: Record<string, unknown>) =>
+    api.patch<Shelf>(`/shelves/${id}`, payload),
+
+  removeShelf: (id: UUID) => api.delete<{ message: string }>(`/shelves/${id}`),
+
+  status: (params?: { store_id?: UUID }) => api.get<ShelfStatus[]>("/inventory/status", params),
+
+  summary: () => api.get<InventorySummary>("/inventory/summary"),
+
+  snapshots: (params?: { shelf_id?: UUID; since?: string; limit?: number; offset?: number }) =>
+    api.get<Page<InventorySnapshot>>("/inventory/snapshots", params),
+
+  events: (params?: {
+    shelf_id?: UUID;
+    event_type?: InventoryEventType;
+    since?: string;
+    limit?: number;
+    offset?: number;
+  }) => api.get<Page<InventoryEvent>>("/inventory/events", params),
+};

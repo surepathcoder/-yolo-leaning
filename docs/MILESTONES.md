@@ -4,26 +4,31 @@ Each milestone is implemented, tested and verified before the next begins.
 "Verified" means the tests pass **and** the behaviour was exercised against the
 running system.
 
+**Current state:** 530 backend tests pass, `ruff check` and `ruff format --check`
+are clean across `backend`, `vision`, `scripts` and `training`, and the frontend
+typechecks and builds. Milestones 3-12, 14 and 17 are complete; 13 is partial;
+15 and 16 have not been started.
+
 | # | Milestone | Status | Verified by |
 |---|-----------|--------|-------------|
 | 0 | Project foundation | ✅ Done | 26 tests; live `/health` against real PostgreSQL + Redis |
 | 1 | Database schema | ✅ Done | 35 tables; migration round-trips on real PostgreSQL; 15 integration tests |
 | 2 | Authentication & RBAC | ✅ Done | 44 API tests + 26 crypto tests; live smoke test against real server |
-| 3 | Camera management | ⬜ Not started | |
-| 4 | Video ingestion | ⬜ Not started | |
-| 5 | YOLO detection | ⬜ Not started | |
-| 6 | Object tracking | ⬜ Not started | |
-| 7 | Zone engine | ⬜ Not started | |
-| 8 | Line crossing & counting | ⬜ Not started | |
-| 9 | Loitering | ⬜ Not started | |
-| 10 | After-hours detection | ⬜ Not started | |
-| 11 | Event engine | ⬜ Not started | |
-| 12 | Alert engine | ⬜ Not started | |
-| 13 | Event evidence | ⬜ Not started | |
-| 14 | Retail inventory | ⬜ Not started | |
-| 15 | Custom product detection | ⬜ Not started | |
-| 16 | POS integration | ⬜ Not started | |
-| 17 | Dashboard | ⬜ Not started | |
+| 3 | Camera management | ✅ Done | `test_camera_api.py`; credentials encrypted at rest |
+| 4 | Video ingestion | ✅ Done | `vision/cameras`; file, webcam, RTSP and synthetic sources |
+| 5 | YOLO detection | ✅ Done | `vision/detection`; CPU inference against `yolo26n.pt` |
+| 6 | Object tracking | ✅ Done | `test_vision_tracking.py`; ByteTrack + Kalman |
+| 7 | Zone engine | ✅ Done | `test_vision_zones.py`, `test_zones_pipeline.py` |
+| 8 | Line crossing & counting | ✅ Done | `test_vision_counting.py` |
+| 9 | Loitering | ✅ Done | `vision/events/rules.py`; covered in `test_zones_pipeline.py` |
+| 10 | After-hours detection | ✅ Done | `vision/events/schedule.py` + store operating hours |
+| 11 | Event engine | ✅ Done | `test_events_alerts.py` |
+| 12 | Alert engine | ✅ Done | `test_events_alerts.py`; notification channels |
+| 13 | Event evidence | 🟡 Partial | Model and `record_evidence()` exist but **nothing calls them** — no snapshot or clip is captured yet |
+| 14 | Retail inventory | ✅ Done | 67 tests (`test_vision_inventory.py`, `test_inventory_api.py`); wired through `build_pipeline_config` |
+| 15 | Custom product detection | ⬜ Not started | `training/` is empty |
+| 16 | POS integration | ⬜ Not started | `vision/pos/` is a stub |
+| 17 | Dashboard | ✅ Done | 11 pages, realtime via WebSocket; typechecks and builds clean. **No frontend tests yet** |
 
 ---
 
@@ -164,3 +169,86 @@ Live against the running server + real PostgreSQL:
   refresh (victim)    -> 401  <- whole family revoked
   weak password       -> 422 VALIDATION_ERROR
 ```
+
+---
+
+## Milestone 14 — Retail inventory ✅
+
+**Delivered**
+
+*Vision engine* (`vision/inventory/`, no backend dependency)
+
+- `estimate_occupancy()` — the fraction of a shelf polygon covered by product
+  detections, measured on a fixed 64x64 grid clipped to the polygon, so an
+  L-shaped or angled shelf is measured over its true area
+- Coverage is a **union** over detections, not a sum: two overlapping boxes
+  describe one covered patch, and adding them would report a shelf as more
+  than full
+- Optional `baseline_occupancy` calibrates out the gaps, shadows and shelf
+  edge that stop a genuinely full shelf from ever reading 1.0
+- `InventoryEngine` — interval sampling, a stability requirement before a new
+  value is believed, per-kind cooldowns, and level events that fire on entry
+  only
+- `calibrate_baseline()` — median, not max, so one inflated frame cannot
+  become a permanent baseline
+
+*Backend* — product and shelf CRUD (both soft-deleting), reading and event
+history, per-shelf status, an organization summary, and 9 endpoints under
+`/products`, `/shelves` and `/inventory`.
+
+*Pipeline* — `PipelineConfig.shelves`, an `InventoryEngine` per camera, shelf
+observations on `FrameResult`, and `apply_config` adopting shelf changes
+without restarting the camera.
+
+*Dashboard* — an Inventory page with shelf levels, activity and the catalogue.
+
+**Occlusion, which is the point**
+
+A person standing at a shelf hides it. Reported naively, that shelf reads
+empty, and the system announces a stockout every time somebody shops. The
+whole feature's credibility rests on not doing that, so occlusion is handled
+at all four layers:
+
+| Layer | Behaviour |
+|-------|-----------|
+| `estimate_occupancy` | Occluders are measured separately; coverage is computed over the **visible** part of the shelf, so a half-hidden shelf whose visible half is stocked reads as stocked |
+| `InventoryEngine` | Occluded readings never move state and never emit; they also clear any partial confirmation, so readings either side of a passer-by are not stitched together |
+| `services/inventory` | Occluded snapshots are stored (they are a true record of what the camera saw) but never establish status and never count towards "empty" |
+| Dashboard | An unknown shelf gets no progress bar at all — a zero-width bar and a genuinely empty shelf would look identical |
+
+A shelf that has never been read reports `UNKNOWN`, which is deliberately
+distinct from reading as empty, and the summary surfaces that count rather
+than hiding it: "we cannot see 6 of your shelves" is information the operator
+needs.
+
+**What it deliberately does not do**
+
+No endpoint returns a unit count. CCTV at shelf-monitoring angles cannot
+resolve individual items on a packed shelf, and a field called `quantity`
+would invite every consumer to believe it could. Occupancy is a ratio and a
+coarse level, and that is the honest limit of what the camera knows.
+
+Nothing here concludes *why* stock moved. Restocking, a customer, a staff
+member tidying a display and a detector error all produce the same row.
+`nearby_track_keys` is recorded as context for a human reviewer, computed per
+shelf, and is explicitly not an attribution — see [`PRIVACY.md`](PRIVACY.md).
+
+`POSSIBLE_INVENTORY_DISCREPANCY` still cannot fire: it needs milestone 16.
+
+**Verification**
+
+```
+$ cd backend && python -m pytest
+530 passed
+
+$ python -m ruff check backend vision scripts training
+All checks passed!
+
+$ cd frontend && npm run typecheck && npm run build
+✓ built in 7.60s
+```
+
+67 of those tests are new. The ones that matter most assert that an occluded
+reading never becomes a shelf's status, that a never-read shelf reports
+UNKNOWN rather than empty, that a single anomalous reading cannot manufacture
+a stockout, and that one tenant cannot see another's stock levels.
