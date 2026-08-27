@@ -38,6 +38,7 @@ from vision.events import (
     Severity,
     VisionEvent,
 )
+from vision.evidence import EvidenceArtifact, EvidenceCapturer, EvidenceSettings, should_capture
 from vision.inventory import InventoryEngine, InventoryObservation, ShelfDefinition
 from vision.tracking import ByteTracker, build_tracker
 from vision.types import Detection, Frame, TrackedObject
@@ -72,6 +73,10 @@ class PipelineConfig:
     #: the common case -- the inventory engine then costs nothing per frame.
     shelves: list[ShelfDefinition] = field(default_factory=list)
     schedule: OperatingSchedule | None = None
+    #: Snapshot/thumbnail/clip capture for significant events. Disabled by
+    #: default: a pipeline with no evidence sink wired has nothing to do with
+    #: the artefacts.
+    evidence: EvidenceSettings = field(default_factory=EvidenceSettings)
     #: Per-camera override of the global confidence threshold.
     confidence_threshold: float | None = None
     #: Restrict detection to these class names. Empty = all.
@@ -163,6 +168,7 @@ class CameraPipeline:
         tracker: ByteTracker | None = None,
         on_state_change: Callable[[PipelineState, str | None], None] | None = None,
         on_frame: Callable[[FrameResult], None] | None = None,
+        on_evidence: Callable[[EvidenceArtifact], None] | None = None,
     ) -> None:
         self.config = config
         self.source = source
@@ -171,6 +177,7 @@ class CameraPipeline:
         self.vision_config = vision_config or VisionConfig()
         self.on_state_change = on_state_change
         self.on_frame = on_frame
+        self.on_evidence = on_evidence
 
         self.state = PipelineState.IDLE
         self.stats = PipelineStats()
@@ -186,6 +193,7 @@ class CameraPipeline:
         self.zone_engine = ZoneEngine(config.zones, camera_id=config.camera_id)
         self.line_counter = LineCounter(config.lines, camera_id=config.camera_id)
         self.inventory_engine = InventoryEngine(config.shelves, camera_id=config.camera_id)
+        self.evidence_capturer = self._build_evidence_capturer(config.evidence)
 
         self.reader = FrameReader(
             source,
@@ -293,6 +301,8 @@ class CameraPipeline:
             )
         finally:
             self.event_engine.flush()
+            if self.evidence_capturer is not None:
+                self.evidence_capturer.flush()
             if self.state != PipelineState.ERROR:
                 self._set_state(PipelineState.STOPPED)
 
@@ -350,6 +360,12 @@ class CameraPipeline:
         )
         events = self.event_engine.process(context)
 
+        if self.evidence_capturer is not None:
+            self.evidence_capturer.observe(frame)
+            for event in events:
+                if should_capture(event):
+                    self.evidence_capturer.trigger(frame, event, tracks)
+
         duration_ms = (time.perf_counter() - started) * 1000
         self.stats.record_frame(duration_ms, len(detections), len(events))
         self.stats.last_frame_at = frame.timestamp
@@ -380,6 +396,19 @@ class CameraPipeline:
                     dwell[(zone_id, track_key)] = seconds
         return dwell
 
+    # -------------------------------------------------------------- evidence
+    def _build_evidence_capturer(self, settings: EvidenceSettings) -> EvidenceCapturer | None:
+        if not settings.enabled:
+            return None
+        return EvidenceCapturer(settings, self._on_evidence_artifact)
+
+    def _on_evidence_artifact(self, artifact: EvidenceArtifact) -> None:
+        if self.on_evidence is None:
+            return
+        # An evidence sink must never take the pipeline down with it.
+        with contextlib.suppress(Exception):
+            self.on_evidence(artifact)
+
     def _emit_system_event(self, event_type: EventType, severity: Severity, summary: str) -> None:
         self.event_engine.dispatch(
             [
@@ -407,6 +436,11 @@ class CameraPipeline:
         self.zone_engine.set_zones(config.zones)
         self.line_counter.set_lines(config.lines)
         self.inventory_engine.set_shelves(config.shelves)
+        current = self.evidence_capturer.settings if self.evidence_capturer else None
+        if config.evidence != current:
+            # A settings change rebuilds the capturer; the few seconds of
+            # pre-roll buffer are lost once, which a config edit can afford.
+            self.evidence_capturer = self._build_evidence_capturer(config.evidence)
 
     def prune(self, now: datetime | None = None) -> None:
         """Drop state for tracks that are long gone."""
@@ -427,6 +461,9 @@ class CameraPipeline:
             "reader": self.reader.stats.to_dict(),
             "detector": self.detector.stats.to_dict(),
             "events": self.event_engine.stats.to_dict(),
+            "evidence": (
+                self.evidence_capturer.to_dict() if self.evidence_capturer is not None else None
+            ),
             "device": self.detector.device,
             "queue_depth": self.reader.queue_depth,
             "active_tracks": len(self.tracker.active_tracks),
