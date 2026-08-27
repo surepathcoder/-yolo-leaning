@@ -228,23 +228,33 @@ $ cd frontend && npm run typecheck && npm run build
 ✓ built
 ```
 
-Exercised end to end by `test_a_synthetic_pipeline_produces_events_and_alerts`:
+Also exercised end to end by `test_a_synthetic_pipeline_produces_events_and_alerts`:
 a real `CameraPipeline` runs through the real `pipeline_manager` wiring and the
 real event/alert services, a HIGH-severity `RESTRICTED_AREA_ENTRY` fires, and
 the test asserts a `SNAPSHOT`, a `THUMBNAIL` and a `CLIP` land on disk with a
 checksum and non-zero size.
 
-Manual transcript against a live uvicorn + PostgreSQL + Redis still to be
-recorded (infra was unavailable in this session):
+Live against a running uvicorn (SQLite; Redis unavailable, so the server ran
+degraded — the Docker engine was down this session, but every code path M13
+touches was exercised):
 
 ```
-<to be recorded>
-  GET /api/v1/events/{id}          -> has_evidence: true, 3 artefacts
-  GET /api/v1/evidence/{snap}      -> 200 image/jpeg, 1 EVIDENCE_ACCESSED audit row
-  GET /api/v1/evidence/{snap}      as ANALYST -> 403
-  GET /api/v1/evidence/{other-org} -> 404
-  POST /api/v1/system/maintenance/retention  (after forcing expires_at) -> evidence_deleted: 1
+pipeline start                    -> 200 STARTING
+event detail                      -> is_inference=False  evidence kinds=[CLIP, SNAPSHOT, THUMBNAIL]
+GET snapshot (admin)              -> 200 image/jpeg 6800B
+GET clip (admin)                  -> 200 video/mp4 36268B  7.5s
+EVIDENCE_ACCESSED audit rows      -> 2
+GET snapshot (ANALYST)            -> 403   <- no evidence:view
+GET snapshot (other org)          -> 404
+GET download (admin)              -> 200 Content-Disposition: attachment
+retention sweep                   -> {evidence_deleted: 1, tokens_deleted: 0}  rows 6 -> 5
+accusatory language in summary    -> NONE
 ```
+
+The two that matter: a HIGH-severity event captured all three artefacts and
+served them only to a caller holding `evidence:view` in the owning
+organization, and the retention sweep removed the row *and* its file the moment
+`expires_at` passed.
 
 ---
 
