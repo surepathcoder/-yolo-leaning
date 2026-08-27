@@ -41,6 +41,8 @@ class EvidenceRead(APISchema):
     expires_at: datetime | None
     #: Relative API path. Requires evidence:view and is audited on access.
     url: str | None = None
+    #: Attachment download. Requires evidence:export and is audited.
+    download_url: str | None = None
 
 
 class EventRead(APISchema):
@@ -258,4 +260,5 @@ def build_evidence_read(evidence) -> EvidenceRead:
         captured_at=evidence.captured_at,
         expires_at=evidence.expires_at,
         url=f"/api/v1/evidence/{evidence.id}",
+        download_url=f"/api/v1/evidence/{evidence.id}/download",
     )

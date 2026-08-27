@@ -18,8 +18,9 @@ import uuid
 import pytest
 from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.core.security import hash_password
-from app.models import Alert, Event, Zone
+from app.models import Alert, Event, EventEvidence, Zone
 from app.models.enums import EventType, PlanTier, UserRole, VideoSourceKind
 from tests import factories as f
 
@@ -329,7 +330,9 @@ def test_zone_thresholds_fall_back_to_the_global_default(db_session):
 
 # ------------------------------------------------------- end-to-end pipeline
 @pytest.mark.slow
-def test_a_synthetic_pipeline_produces_events_and_alerts(client, db_session, ctx):
+def test_a_synthetic_pipeline_produces_events_and_alerts(
+    client, db_session, ctx, tmp_path, monkeypatch
+):
     """The whole chain: frames -> tracking -> zones -> rules -> events -> alerts.
 
     The detector is driven by the synthetic source's ground truth, so exactly
@@ -352,6 +355,9 @@ def test_a_synthetic_pipeline_produces_events_and_alerts(client, db_session, ctx
         json={"name": "Door", "point_a": [0.55, 0.0], "point_b": [0.55, 1.0]},
         headers=ctx["headers"],
     )
+
+    evidence_dir = tmp_path / "evidence"
+    monkeypatch.setattr(get_settings(), "EVIDENCE_STORAGE_PATH", str(evidence_dir))
 
     started = client.post(f"/api/v1/cameras/{camera_id}/pipeline/start", headers=ctx["headers"])
     assert started.status_code == 200, started.text
@@ -381,6 +387,15 @@ def test_a_synthetic_pipeline_produces_events_and_alerts(client, db_session, ctx
     alerts = db_session.scalars(select(Alert)).all()
     assert alerts, "a restricted-area entry should have raised an alert"
     assert not any("theft" in alert.title.lower() for alert in alerts)
+
+    # M13: the HIGH-severity events captured evidence -- a snapshot, a
+    # thumbnail and a clip -- and the files landed on disk.
+    evidence = db_session.scalars(select(EventEvidence)).all()
+    kinds = {item.kind.value for item in evidence}
+    assert {"SNAPSHOT", "THUMBNAIL", "CLIP"} <= kinds, f"got {kinds}"
+    for item in evidence:
+        assert (evidence_dir / item.storage_path).is_file()
+        assert item.checksum and item.size_bytes > 0
 
 
 @pytest.mark.slow

@@ -78,6 +78,23 @@ class Settings(BaseSettings):
     EVIDENCE_RETENTION_DAYS: int = 30
     SNAPSHOT_RETENTION_DAYS: int = 30
 
+    # ------------------------------------------------------------- evidence
+    #: Capture a snapshot + thumbnail (+ clip) when a significant event fires.
+    EVIDENCE_CAPTURE_ENABLED: bool = True
+    EVIDENCE_CLIP_ENABLED: bool = True
+    #: Seconds of video kept before an event and captured after it.
+    EVIDENCE_PRE_SECONDS: float = 4.0
+    EVIDENCE_POST_SECONDS: float = 4.0
+    #: Frame rate written into the clip container (the processed rate).
+    EVIDENCE_CLIP_FPS: float = 8.0
+    EVIDENCE_THUMBNAIL_WIDTH: int = 320
+
+    # ---------------------------------------------------------- maintenance
+    #: Periodic sweep that deletes evidence past its ``expires_at`` and prunes
+    #: expired refresh tokens. Disable in tests or when an external job owns it.
+    RETENTION_SWEEP_ENABLED: bool = True
+    RETENTION_SWEEP_INTERVAL_HOURS: int = 6
+
     # ---------------------------------------------------------------- events
     LOITERING_THRESHOLD_SECONDS: int = 60
     LINE_CROSSING_COOLDOWN_SECONDS: float = 3.0

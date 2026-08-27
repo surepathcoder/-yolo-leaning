@@ -81,6 +81,19 @@ def vision_device(scope: Scope, _user: CurrentUser) -> dict:
     return payload
 
 
+@router.post("/maintenance/retention", summary="Run the retention sweep now")
+def run_retention(scope: Scope, _user: CurrentUser) -> dict:
+    """Delete expired evidence and refresh tokens on demand.
+
+    The process runs this on a schedule; this endpoint is for a deployment
+    that wants to trigger it explicitly (or verify it works).
+    """
+    scope.require(Permission.SETTINGS_WRITE)
+    from app.services.maintenance import run_retention_sweep
+
+    return run_retention_sweep()
+
+
 @router.get("/plan", summary="Subscription plan and usage")
 def plan(session: DbSession, scope: Scope, _user: CurrentUser) -> dict:
     """The current plan, its limits, and how much of each is used."""

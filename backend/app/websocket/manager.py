@@ -281,6 +281,7 @@ def event_message(event) -> dict[str, Any]:
             "track_id": event.track_id,
             "occurred_at": event.occurred_at.isoformat(),
             "summary": event.summary,
+            "has_evidence": bool(event.evidence),
         },
     }
 

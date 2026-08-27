@@ -25,6 +25,9 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ["LOG_LEVEL"] = "WARNING"
 os.environ["JWT_SECRET"] = "test-secret-not-used-in-production"
 os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+# The suite drives the retention sweep explicitly; a background loop would race
+# the in-memory database teardown between tests.
+os.environ.setdefault("RETENTION_SWEEP_ENABLED", "false")
 
 import pytest
 from fastapi.testclient import TestClient

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import anyio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -18,6 +21,24 @@ from app.websocket import routes as websocket_routes
 from app.websocket.broadcast import subscriber
 
 log = get_logger(__name__)
+
+
+async def _retention_loop(interval_hours: int) -> None:
+    """Run the retention sweep every ``interval_hours``, forever.
+
+    The sweep is synchronous and touches the database, so it runs in a worker
+    thread. One failed pass logs and waits for the next rather than killing
+    the loop.
+    """
+    from app.services.maintenance import run_retention_sweep
+
+    interval_seconds = max(interval_hours, 1) * 3600
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            await anyio.to_thread.run_sync(run_retention_sweep)
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("retention_sweep_failed", error=str(exc)[:200])
 
 
 @asynccontextmanager
@@ -40,7 +61,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         log.warning("realtime_subscriber_start_failed", error=str(exc)[:200])
 
+    retention_task: asyncio.Task | None = None
+    if settings.RETENTION_SWEEP_ENABLED:
+        retention_task = asyncio.create_task(
+            _retention_loop(settings.RETENTION_SWEEP_INTERVAL_HOURS)
+        )
+
     yield
+
+    if retention_task is not None:
+        retention_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await retention_task
 
     # Stop cameras before closing sockets: a pipeline mid-frame would
     # otherwise try to publish to a manager that is already shutting down.

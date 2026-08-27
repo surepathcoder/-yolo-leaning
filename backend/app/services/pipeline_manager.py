@@ -31,8 +31,10 @@ the real world.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -43,15 +45,17 @@ from app.core.config import get_settings
 from app.core.errors import AppError, ConflictError, ErrorCode, NotFoundError
 from app.core.logging import get_logger
 from app.db.session import session_scope
-from app.models import Camera, CountingLine, Shelf, Store, Zone
-from app.models.enums import CameraStatus, VideoSourceKind
+from app.models import Camera, CountingLine, Event, Shelf, Store, Zone
+from app.models.enums import CameraStatus, EvidenceKind, VideoSourceKind
+from app.services import evidence as evidence_service
 from app.services.cameras import build_video_source, record_status
-from app.services.events import ingest_vision_event
+from app.services.events import ingest_vision_event, make_dedupe_key, publish_event_update
 from vision.cameras import VideoSourceError
 from vision.config import VisionConfig
 from vision.counting import LineDefinition
 from vision.detection import DetectionEngine, ModelLoadError, build_engine
 from vision.events import CallbackSink, EventEngine, default_rules
+from vision.evidence import EvidenceSettings
 from vision.inventory import ShelfDefinition
 from vision.pipelines import CameraPipeline, PipelineConfig, PipelineState
 from vision.types import ReferencePoint
@@ -202,6 +206,18 @@ def build_shelf_definitions(shelves: list[Shelf]) -> list[ShelfDefinition]:
     return definitions
 
 
+def build_evidence_settings(settings) -> EvidenceSettings:
+    """The engine's evidence config, from the backend's settings."""
+    return EvidenceSettings(
+        enabled=settings.EVIDENCE_CAPTURE_ENABLED,
+        clip=settings.EVIDENCE_CLIP_ENABLED,
+        pre_seconds=settings.EVIDENCE_PRE_SECONDS,
+        post_seconds=settings.EVIDENCE_POST_SECONDS,
+        clip_fps=settings.EVIDENCE_CLIP_FPS,
+        thumbnail_width=settings.EVIDENCE_THUMBNAIL_WIDTH,
+    )
+
+
 def build_pipeline_config(session, camera: Camera) -> PipelineConfig:
     """Assemble everything the engine needs for one camera."""
     settings = get_settings()
@@ -261,6 +277,7 @@ def build_pipeline_config(session, camera: Camera) -> PipelineConfig:
         ),
         shelves=build_shelf_definitions(shelves),
         schedule=schedule,
+        evidence=build_evidence_settings(settings),
         confidence_threshold=camera.confidence_threshold,
         detect_classes=tuple(camera.detect_classes or ()),
     )
@@ -301,6 +318,11 @@ class RunningPipeline:
     events_ingested: int = 0
     events_deduplicated: int = 0
     ingest_failures: int = 0
+    evidence_stored: int = 0
+    evidence_failures: int = 0
+    #: Evidence storage (file write + DB row) runs here, off the frame thread:
+    #: encoding is already done, and a slow disk must not cost frames.
+    evidence_executor: ThreadPoolExecutor | None = None
 
 
 class PipelineManager:
@@ -452,6 +474,69 @@ class PipelineManager:
                     error=str(exc)[:200],
                 )
 
+        def _persist_evidence(artifact) -> None:
+            """Store one artefact against its already-persisted event.
+
+            The event was written by ``on_event`` in an earlier (snapshot) or
+            slightly earlier (clip) call, so it is matched by the same dedupe
+            key the persistence layer builds. Runs on the evidence executor,
+            not the frame thread; failures are recorded and swallowed.
+            """
+            vision_event = artifact.event
+            key = make_dedupe_key(
+                organization_id=organization_id,
+                camera_id=str(camera_id),
+                event_type=vision_event.event_type.value,
+                occurred_at=vision_event.occurred_at,
+                track_key=vision_event.track_key,
+                zone_id=vision_event.zone_id,
+            )
+            running = running_ref["value"]
+            try:
+                with session_scope() as worker_session:
+                    event = worker_session.scalar(select(Event).where(Event.dedupe_key == key))
+                    if event is None:
+                        log.warning(
+                            "evidence_orphan",
+                            camera_id=str(camera_id),
+                            kind=artifact.kind,
+                            event_type=vision_event.event_type.value,
+                        )
+                        return
+                    evidence_service.store_artifact(
+                        worker_session,
+                        event,
+                        kind=EvidenceKind(artifact.kind),
+                        data=artifact.data,
+                        mime_type=artifact.mime_type,
+                        width=artifact.width,
+                        height=artifact.height,
+                        duration_seconds=artifact.duration_seconds,
+                        bbox=list(artifact.bbox) if artifact.bbox is not None else None,
+                        captured_at=artifact.captured_at,
+                    )
+                    worker_session.refresh(event, attribute_names=["evidence"])
+                    publish_event_update(event)
+                if running is not None:
+                    running.evidence_stored += 1
+            except Exception as exc:
+                if running is not None:
+                    running.evidence_failures += 1
+                log.error(
+                    "evidence_store_failed",
+                    camera_id=str(camera_id),
+                    kind=artifact.kind,
+                    error=str(exc)[:200],
+                )
+
+        def on_evidence(artifact) -> None:
+            """Hand an artefact to the executor. Called on the frame thread."""
+            running = running_ref["value"]
+            if running is None or running.evidence_executor is None:
+                return
+            with contextlib.suppress(RuntimeError):  # executor already shut down
+                running.evidence_executor.submit(_persist_evidence, artifact)
+
         def on_state_change(state: PipelineState, detail: str | None) -> None:
             """Mirror the pipeline's state onto the camera row and dashboards."""
             mapping = {
@@ -495,12 +580,18 @@ class PipelineManager:
             event_engine,
             vision_config=vision_config,
             on_state_change=on_state_change,
+            on_evidence=on_evidence,
         )
 
         running = RunningPipeline(
             camera_id=camera.id,
             organization_id=organization_id,
             pipeline=pipeline,
+            evidence_executor=(
+                ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"evidence-{camera.id}")
+                if pipeline_config.evidence.enabled
+                else None
+            ),
         )
         running_ref["value"] = running
 
@@ -526,6 +617,10 @@ class PipelineManager:
             return False
 
         running.pipeline.stop(timeout=timeout)
+        if running.evidence_executor is not None:
+            # The pipeline's flush() has already queued the last clips; wait
+            # for the executor to drain them before the process moves on.
+            running.evidence_executor.shutdown(wait=True)
         try:
             with session_scope() as session:
                 record_status(session, camera_id, CameraStatus.OFFLINE)
@@ -567,6 +662,8 @@ class PipelineManager:
                 "events_ingested": running.events_ingested,
                 "events_deduplicated": running.events_deduplicated,
                 "ingest_failures": running.ingest_failures,
+                "evidence_stored": running.evidence_stored,
+                "evidence_failures": running.evidence_failures,
                 "started_at": running.started_at.isoformat(),
             }
             for running in pipelines

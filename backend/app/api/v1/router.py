@@ -9,6 +9,7 @@ from app.api.v1 import (
     auth,
     cameras,
     events,
+    evidence,
     inventory,
     pos,
     stores,
@@ -22,6 +23,7 @@ api_router.include_router(stores.router)
 api_router.include_router(cameras.router)
 api_router.include_router(zones.router)
 api_router.include_router(events.router)
+api_router.include_router(evidence.router)
 api_router.include_router(inventory.router)
 api_router.include_router(pos.router)
 api_router.include_router(alerts.router)

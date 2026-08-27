@@ -187,6 +187,21 @@ def ingest_vision_event(
     return event, alert
 
 
+def publish_event_update(event: Event) -> None:
+    """Re-broadcast an event whose derived state changed (e.g. evidence attached).
+
+    Best-effort, like :func:`_publish_realtime`: the database row is the truth
+    and a Redis outage costs only the live refresh.
+    """
+    try:
+        from app.websocket.broadcast import publish
+        from app.websocket.manager import event_message
+
+        publish(event_message(event))
+    except Exception as exc:
+        log.warning("realtime_publish_skipped", error=str(exc)[:200])
+
+
 def _publish_realtime(event: Event, alert: Alert | None) -> None:
     """Push the event (and any alert) to connected dashboards.
 
@@ -392,7 +407,9 @@ def attach_evidence(
     checksum: str | None = None,
     width: int | None = None,
     height: int | None = None,
+    duration_seconds: float | None = None,
     bbox: list | None = None,
+    captured_at: datetime | None = None,
     retention_days: int = 30,
 ) -> EventEvidence:
     """Record an evidence artefact against an event.
@@ -411,8 +428,9 @@ def attach_evidence(
         checksum=checksum,
         width=width,
         height=height,
+        duration_seconds=duration_seconds,
         bbox=bbox,
-        captured_at=now,
+        captured_at=captured_at or now,
         expires_at=now + timedelta(days=retention_days),
     )
     session.add(evidence)
