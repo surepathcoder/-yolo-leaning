@@ -252,3 +252,21 @@ $ cd frontend && npm run typecheck && npm run build
 reading never becomes a shelf's status, that a never-read shelf reports
 UNKNOWN rather than empty, that a single anomalous reading cannot manufacture
 a stockout, and that one tenant cannot see another's stock levels.
+
+Live against the running server + real PostgreSQL and Redis:
+
+```
+create product        -> 201 sku=AZAM-500 detectable=True
+create shelf          -> 201 code=A3-T products=1
+shelf too small       -> 422 INVALID_POLYGON
+status (never read)   -> 200 level=UNKNOWN ratio=None      <- not "empty"
+status (full reading)  -> 200 level=FULL    ratio=0.92
+status (occluded)     -> 200 level=FULL    occluded=True  <- not "empty"
+summary               -> 200 total=1 empty=0 unknown=0 products=1
+snapshots stored      -> 200 total=2                       <- occluded one kept
+tenant isolation      -> list=0 byid=404 NOT_FOUND
+```
+
+The two lines marked above are the ones the feature's credibility rests on: a
+shelf nobody has looked at, and a shelf somebody is standing in front of, both
+refuse to claim they are empty.
