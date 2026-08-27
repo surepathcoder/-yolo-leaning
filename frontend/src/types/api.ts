@@ -320,7 +320,10 @@ export interface Evidence {
   bbox: number[] | null;
   captured_at: ISODateTime;
   expires_at: ISODateTime | null;
+  /** Authorised, audited inline view. Fetch as a blob -- never `<img src>`. */
   url: string | null;
+  /** Authorised, audited attachment download. Requires evidence:export. */
+  download_url: string | null;
 }
 
 export interface EventSummary {

@@ -75,8 +75,15 @@ Detections are **sampled, not exhaustive**: storing every detection of every
 frame would be roughly 26 million rows per camera per month and would create a
 far more invasive record than the product needs.
 
+Snapshots and clips are captured **only for events that warrant an alert** --
+severity MEDIUM and above, excluding routine noise like line crossings. An
+ordinary afternoon of trading produces none. What triggers capture is spelled
+out in [`EVIDENCE.md`](EVIDENCE.md).
+
 Retention is configurable per deployment, and evidence rows carry an explicit
-`expires_at` so deletion is scheduled rather than aspirational.
+`expires_at`. A sweep (`RETENTION_SWEEP_ENABLED`, every
+`RETENTION_SWEEP_INTERVAL_HOURS`) deletes the row *and the file* once that date
+passes, so deletion is scheduled rather than aspirational.
 
 ## Access control
 

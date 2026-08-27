@@ -261,9 +261,52 @@ export async function request<T>(
   return (text ? JSON.parse(text) : undefined) as T;
 }
 
+/**
+ * A binary GET that carries the same auth (and single-flight refresh) as
+ * {@link request}. Used for evidence artefacts: the endpoint is authorised per
+ * request, so `<img src>` -- which cannot send the bearer token -- would just
+ * 401. The caller turns the blob into an object URL and revokes it when done.
+ */
+export async function requestBlob(
+  path: string,
+  options: { query?: RequestOptions["query"]; signal?: AbortSignal } = {},
+): Promise<Blob> {
+  const { query, signal } = options;
+
+  const send = async (token: string | null): Promise<Response> =>
+    fetch(buildUrl(path, query), {
+      method: "GET",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal,
+    });
+
+  let response: Response;
+  try {
+    response = await send(tokenStore.access);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError(0, "NETWORK_ERROR", "Cannot reach the server.");
+  }
+
+  if (response.status === 401) {
+    const token = await refreshOnce();
+    if (!token) throw await toApiError(response);
+    response = await send(token);
+    if (response.status === 401) {
+      tokenStore.clear();
+      onUnauthorized();
+      throw await toApiError(response);
+    }
+  }
+
+  if (!response.ok) throw await toApiError(response);
+  return response.blob();
+}
+
 export const api = {
   get: <T>(path: string, query?: RequestOptions["query"], signal?: AbortSignal) =>
     request<T>(path, { method: "GET", query, signal }),
+  getBlob: requestBlob,
   post: <T>(path: string, body?: unknown, options?: RequestOptions) =>
     request<T>(path, { ...options, method: "POST", body }),
   patch: <T>(path: string, body?: unknown) =>

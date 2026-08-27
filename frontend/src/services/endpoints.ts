@@ -196,6 +196,13 @@ export const eventApi = {
 
   get: (id: UUID) => api.get<EventDetail>(`/events/${id}`),
 
+  /** An evidence artefact's bytes for inline view. Authorised, audited. */
+  evidenceBlob: (evidenceId: UUID) => api.getBlob(`/evidence/${evidenceId}`),
+
+  /** The same bytes, but the request audits as an export. Needs evidence:export. */
+  evidenceDownloadBlob: (evidenceId: UUID) =>
+    api.getBlob(`/evidence/${evidenceId}/download`),
+
   types: () => api.get<EventTypeInfo[]>("/events/types"),
 
   summary: () =>

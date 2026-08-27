@@ -120,7 +120,7 @@ Every tenant-owned table carries `organization_id`. The rules:
 |------|-------|-----|
 | Entities, events, audit | PostgreSQL | Relational integrity, aggregation queries for analytics |
 | Realtime fan-out, rate limits, short caches | Redis | Pub/sub between vision workers and API processes |
-| Snapshots and clips | Filesystem (S3-compatible later) | Large binaries do not belong in a row |
+| Snapshots and clips | Filesystem under `EVIDENCE_STORAGE_PATH` (S3-compatible later); row holds a relative path + SHA-256 | Large binaries do not belong in a row. See [`EVIDENCE.md`](EVIDENCE.md) |
 | Edge event queue | Local SQLite | Survives process restart with no server |
 
 Analytics aggregation happens in PostgreSQL, never in the browser.

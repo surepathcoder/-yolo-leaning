@@ -205,6 +205,7 @@ cd backend
 | [TRACKING.md](docs/TRACKING.md) | Tracker choice and tuning |
 | [ZONES.md](docs/ZONES.md) | Zone and line geometry |
 | [EVENT_ENGINE.md](docs/EVENT_ENGINE.md) | Rules, event types, severity |
+| [EVIDENCE.md](docs/EVIDENCE.md) | Snapshot / clip capture, delivery and retention |
 | [INVENTORY.md](docs/INVENTORY.md) | Shelf occupancy and stock intelligence |
 | [POS_INTEGRATION.md](docs/POS_INTEGRATION.md) | POS providers and correlation |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | CPU, GPU and edge deployment |

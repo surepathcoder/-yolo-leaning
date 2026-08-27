@@ -12,7 +12,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import {
@@ -24,12 +24,14 @@ import {
   LoadingRows,
   RelativeTime,
   SeverityBadge,
+  Spinner,
   classNames,
   formatDuration,
   humaniseEventType,
 } from "@/components/ui/primitives";
 import { cameraApi, eventApi, storeApi } from "@/services/endpoints";
-import type { EventSummary, Severity, UUID } from "@/types/api";
+import { useAuth } from "@/stores/auth";
+import type { Evidence, EventSummary, Severity, UUID } from "@/types/api";
 import { SEVERITIES } from "@/types/api";
 
 const PAGE_SIZE = 50;
@@ -389,6 +391,8 @@ function EventRow({
                   <Detail label="Track key" value={detail.data.track_key ?? "—"} mono />
                 </dl>
 
+                <EvidencePanel evidence={detail.data.evidence} />
+
                 {detail.data.source_events.length > 0 && (
                   <div>
                     <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-slate-500">
@@ -447,5 +451,115 @@ function Detail({
       <dt className="text-2xs uppercase tracking-wider text-slate-500">{label}</dt>
       <dd className={classNames("mt-0.5 text-slate-300", mono && "font-mono")}>{value}</dd>
     </div>
+  );
+}
+
+/**
+ * Fetch an evidence artefact as a blob and expose it as an object URL.
+ *
+ * The endpoint is authorised and audited per request, so the bytes cannot be
+ * loaded through a plain `<img src>` (no bearer token) -- they come through the
+ * API client. The URL is revoked on unmount.
+ */
+function useObjectUrl(evidenceId: UUID): { url: string | null; error: boolean; loading: boolean } {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let revoked: string | null = null;
+    let cancelled = false;
+    setUrl(null);
+    setError(false);
+
+    eventApi
+      .evidenceBlob(evidenceId)
+      .then((blob) => {
+        if (cancelled) return;
+        revoked = URL.createObjectURL(blob);
+        setUrl(revoked);
+      })
+      .catch(() => !cancelled && setError(true));
+
+    return () => {
+      cancelled = true;
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [evidenceId]);
+
+  return { url, error, loading: url === null && !error };
+}
+
+function EvidencePanel({ evidence }: { evidence: Evidence[] }) {
+  const can = useAuth((state) => state.can);
+
+  if (evidence.length === 0) return null;
+  if (!can("evidence:view")) {
+    return (
+      <p className="rounded-lg border border-canvas-border bg-canvas px-3 py-2 text-xs text-slate-500">
+        This event has {evidence.length} evidence{" "}
+        {evidence.length === 1 ? "artefact" : "artefacts"}. Viewing them needs the
+        evidence permission.
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-slate-500">
+        Evidence
+      </p>
+      <div className="flex flex-wrap gap-3">
+        {evidence.map((item) => (
+          <EvidenceItem key={item.id} item={item} canExport={can("evidence:export")} />
+        ))}
+      </div>
+      <p className="mt-2 text-2xs text-slate-500">
+        A still or clip of what the camera saw. It is not a finding of
+        wrongdoing.
+      </p>
+    </div>
+  );
+}
+
+function EvidenceItem({ item, canExport }: { item: Evidence; canExport: boolean }) {
+  const { url, error, loading } = useObjectUrl(item.id);
+  const isClip = item.kind === "CLIP";
+
+  const download = async () => {
+    const blob = await eventApi.evidenceDownloadBlob(item.id);
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = `${item.kind.toLowerCase()}-${item.id}.${isClip ? "mp4" : "jpg"}`;
+    anchor.click();
+    URL.revokeObjectURL(href);
+  };
+
+  return (
+    <figure className="w-64 overflow-hidden rounded-lg border border-canvas-border bg-canvas">
+      <div className="flex aspect-video items-center justify-center bg-black/40">
+        {loading && <Spinner label="Loading" />}
+        {error && <span className="text-2xs text-rose-400">Could not load</span>}
+        {url && isClip && <video src={url} controls className="h-full w-full" />}
+        {url && !isClip && (
+          <img src={url} alt={`${item.kind.toLowerCase()} evidence`} className="h-full w-full object-contain" />
+        )}
+      </div>
+      <figcaption className="flex items-center justify-between px-2.5 py-1.5 text-2xs text-slate-500">
+        <span>
+          {humaniseEventType(item.kind)}
+          {item.duration_seconds ? ` · ${Math.round(item.duration_seconds)}s` : ""}
+        </span>
+        {canExport && (
+          <button
+            type="button"
+            onClick={() => void download()}
+            className="text-brand-300 hover:text-brand-200"
+          >
+            Download
+          </button>
+        )}
+      </figcaption>
+    </figure>
   );
 }

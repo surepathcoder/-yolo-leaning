@@ -4,10 +4,10 @@ Each milestone is implemented, tested and verified before the next begins.
 "Verified" means the tests pass **and** the behaviour was exercised against the
 running system.
 
-**Current state:** 606 backend tests pass, `ruff check` and `ruff format --check`
+**Current state:** 636 backend tests pass, `ruff check` and `ruff format --check`
 are clean across `backend`, `vision`, `scripts` and `training`, and the frontend
-typechecks and builds. Milestones 3-12, 14, 16 and 17 are complete; 13 is
-partial; 15 has not been started.
+typechecks and builds. Milestones 3-14, 16 and 17 are complete; 15 has not been
+started.
 
 | # | Milestone | Status | Verified by |
 |---|-----------|--------|-------------|
@@ -24,7 +24,7 @@ partial; 15 has not been started.
 | 10 | After-hours detection | ✅ Done | `vision/events/schedule.py` + store operating hours |
 | 11 | Event engine | ✅ Done | `test_events_alerts.py` |
 | 12 | Alert engine | ✅ Done | `test_events_alerts.py`; notification channels |
-| 13 | Event evidence | 🟡 Partial | Model and `record_evidence()` exist but **nothing calls them** — no snapshot or clip is captured yet |
+| 13 | Event evidence | ✅ Done | 45 tests (`test_vision_evidence.py`, `test_evidence_service.py`, `test_evidence_api.py`); snapshot + thumbnail + clip captured and served, audited, swept |
 | 14 | Retail inventory | ✅ Done | 67 tests (`test_vision_inventory.py`, `test_inventory_api.py`); wired through `build_pipeline_config` |
 | 15 | Custom product detection | ⬜ Not started | `training/` is empty |
 | 16 | POS integration | ✅ Done | 71 tests (`test_vision_pos.py`, `test_pos_api.py`); `POSSIBLE_INVENTORY_DISCREPANCY` can now fire |
@@ -168,6 +168,82 @@ Live against the running server + real PostgreSQL:
   refresh (replay)    -> 401  <- stolen-token detection
   refresh (victim)    -> 401  <- whole family revoked
   weak password       -> 422 VALIDATION_ERROR
+```
+
+---
+
+## Milestone 13 — Event evidence ✅
+
+**Delivered**
+
+*Vision engine* (`vision/evidence/`, no backend dependency)
+
+- `EvidenceCapturer` — a rolling buffer of the last `pre_seconds` of decoded
+  frames; on a triggering event it emits an annotated snapshot and a thumbnail
+  at once, then fills a clip from `pre_seconds` before to `post_seconds` after
+  and encodes it to MP4
+- `should_capture()` — a deliberate mirror of `alerts.py::should_alert`, so
+  evidence is kept for exactly the events that warrant a human's attention and
+  nothing else. A parametrised test asserts the two never drift
+- Encoding failures are counted and swallowed, never raised into the frame
+  thread — same contract as `CallbackSink`
+
+*Backend*
+
+- `services/evidence.py` — writes bytes under `EVIDENCE_STORAGE_PATH` by a
+  relative path, records size, SHA-256 and `expires_at`, and resolves an
+  artefact tenant-scoped through its parent event
+- `pipeline_manager` hands each artefact to a per-pipeline single-thread
+  executor **off the frame thread**, matches it to the persisted event by
+  dedupe key, and re-broadcasts so the dashboard flips `has_evidence`
+- `GET /evidence/{id}` and `/download` — authorised (`evidence:view` /
+  `evidence:export`), audited (`EVIDENCE_ACCESSED` / `EXPORT`), served from disk
+- `services/maintenance.py` + a lifespan loop + `POST /system/maintenance/retention`
+  — deletes evidence past `expires_at` (row *and* file) and prunes expired tokens
+
+*Dashboard* — the event timeline's expanded row shows each snapshot and an
+inline clip player, fetched as blobs through the authenticated client (an
+`<img src>` carries no token), gated on `evidence:view`, with a download for
+holders of `evidence:export`.
+
+**What it refuses to do**
+
+- No continuous recording. Only alert-worthy events, a few seconds each.
+- No public or guessable URLs; every byte served is authorised and audited.
+- `ANALYST` cannot see any of it — analysing traffic patterns does not require
+  looking at pictures of people.
+
+Full detail: [`docs/EVIDENCE.md`](EVIDENCE.md).
+
+**Verification**
+
+```
+$ cd backend && python -m pytest
+636 passed
+
+$ python -m ruff check backend vision scripts training
+All checks passed!
+
+$ cd frontend && npm run typecheck && npm run build
+✓ built
+```
+
+Exercised end to end by `test_a_synthetic_pipeline_produces_events_and_alerts`:
+a real `CameraPipeline` runs through the real `pipeline_manager` wiring and the
+real event/alert services, a HIGH-severity `RESTRICTED_AREA_ENTRY` fires, and
+the test asserts a `SNAPSHOT`, a `THUMBNAIL` and a `CLIP` land on disk with a
+checksum and non-zero size.
+
+Manual transcript against a live uvicorn + PostgreSQL + Redis still to be
+recorded (infra was unavailable in this session):
+
+```
+<to be recorded>
+  GET /api/v1/events/{id}          -> has_evidence: true, 3 artefacts
+  GET /api/v1/evidence/{snap}      -> 200 image/jpeg, 1 EVIDENCE_ACCESSED audit row
+  GET /api/v1/evidence/{snap}      as ANALYST -> 403
+  GET /api/v1/evidence/{other-org} -> 404
+  POST /api/v1/system/maintenance/retention  (after forcing expires_at) -> evidence_deleted: 1
 ```
 
 ---

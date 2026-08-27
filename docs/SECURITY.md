@@ -78,6 +78,22 @@ sees it in their own audit view.
 The system fails **closed**: a non-super-admin with no organization can see
 nothing, and `scope.apply()` raises rather than returning an unfiltered query.
 
+## Evidence
+
+Snapshots and clips are files on disk, referenced by a **relative** path and a
+SHA-256. They are never public URLs:
+
+- `GET /api/v1/evidence/{id}` requires `evidence:view`, is tenant-scoped
+  through the parent event (so a store-restricted operator is held to their
+  stores), and writes an `EVIDENCE_ACCESSED` audit row on every hit.
+- `GET /api/v1/evidence/{id}/download` additionally requires `evidence:export`
+  and audits as `EXPORT`.
+- The dashboard fetches the bytes through the authenticated API client, not an
+  `<img src>` — a plain image request carries no bearer token.
+- A file removed by retention is a 404, not an error.
+
+See [`EVIDENCE.md`](EVIDENCE.md) for what is captured and when.
+
 ## Credentials
 
 Camera passwords are encrypted with Fernet (AES-128-CBC + HMAC) using
