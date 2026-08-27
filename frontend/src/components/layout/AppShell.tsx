@@ -44,6 +44,7 @@ const NAV_SECTIONS: { heading: string; items: NavItem[] }[] = [
       { to: "/cameras", label: "Cameras", permission: "camera:read" },
       { to: "/zones", label: "Zones & lines", permission: "zone:read" },
       { to: "/inventory", label: "Inventory", permission: "inventory:read" },
+      { to: "/reconciliation", label: "Reconciliation", permission: "pos:read" },
     ],
   },
   {

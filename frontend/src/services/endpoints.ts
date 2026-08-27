@@ -14,6 +14,9 @@ import type {
   CameraHealth,
   CameraSummary,
   ConnectionTestResult,
+  Correlation,
+  CorrelationAccuracy,
+  CorrelationStatus,
   CountingLine,
   CurrentUser,
   EventDetail,
@@ -30,8 +33,12 @@ import type {
   Page,
   PipelineStatus,
   PlanSummary,
+  POSConfig,
+  POSImportResult,
+  POSTransaction,
   Product,
   RegisterResponse,
+  ReviewOutcome,
   SessionInfo,
   Severity,
   Shelf,
@@ -281,4 +288,41 @@ export const inventoryApi = {
     limit?: number;
     offset?: number;
   }) => api.get<Page<InventoryEvent>>("/inventory/events", params),
+};
+
+// ----------------------------------------------------------------------- pos
+export const posApi = {
+  transactions: (params?: {
+    store_id?: UUID;
+    since?: string;
+    until?: string;
+    limit?: number;
+    offset?: number;
+  }) => api.get<Page<POSTransaction>>("/pos/transactions", params),
+
+  importTransactions: (payload: Record<string, unknown>) =>
+    api.post<POSImportResult>("/pos/transactions", payload),
+
+  correlate: (payload: { store_id?: UUID; since?: string; limit?: number }) =>
+    api.post<Correlation[]>("/pos/correlate", payload),
+
+  correlations: (params?: {
+    status?: CorrelationStatus;
+    store_id?: UUID;
+    reviewed?: boolean;
+    limit?: number;
+    offset?: number;
+  }) => api.get<Page<Correlation>>("/pos/correlations", params),
+
+  correlation: (id: UUID) => api.get<Correlation>(`/pos/correlations/${id}`),
+
+  review: (id: UUID, payload: { outcome: ReviewOutcome; notes?: string }) =>
+    api.post<Correlation>(`/pos/correlations/${id}/review`, payload),
+
+  accuracy: () => api.get<CorrelationAccuracy>("/pos/accuracy"),
+
+  config: (storeId: UUID) => api.get<POSConfig>(`/pos/config/${storeId}`),
+
+  setConfig: (storeId: UUID, payload: { provider?: string | null; options?: object }) =>
+    api.put<POSConfig>(`/pos/config/${storeId}`, payload),
 };

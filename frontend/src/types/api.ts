@@ -614,3 +614,92 @@ export interface InventoryEvent {
   occurred_at: ISODateTime;
   event_metadata: Record<string, unknown>;
 }
+
+// ----------------------------------------------------------------------- pos
+export type POSTransactionStatus = "COMPLETED" | "VOIDED" | "REFUNDED" | "PENDING";
+
+/**
+ * The outcome of matching a shelf observation against sales.
+ *
+ * `UNMATCHED` means **no sale was found in the window**. It is a statement
+ * about the data, not about a person: restocking, staff moving stock, an item
+ * put back elsewhere, a mis-scanned item and a detection error all land here.
+ * Never render this status without its `explanation`.
+ */
+export type CorrelationStatus = "MATCHED" | "UNMATCHED" | "UNCERTAIN";
+
+export type ReviewOutcome = "CORRECT" | "INCORRECT" | "EXPLAINED" | "UNCLEAR";
+
+export interface POSItem {
+  id: UUID;
+  product_id: UUID | null;
+  external_product_ref: string | null;
+  name: string;
+  quantity: string;
+  unit_price: string | null;
+  total_price: string | null;
+  discount_amount: string | null;
+}
+
+export interface POSTransaction {
+  id: UUID;
+  store_id: UUID;
+  provider: string;
+  external_id: string;
+  receipt_number: string | null;
+  transaction_at: ISODateTime;
+  status: POSTransactionStatus;
+  total_amount: string;
+  currency: string;
+  payment_method: string | null;
+  terminal_ref: string | null;
+  cashier_ref: string | null;
+  imported_at: ISODateTime | null;
+  items: POSItem[];
+}
+
+export interface Correlation {
+  id: UUID;
+  store_id: UUID;
+  inventory_event_id: UUID;
+  pos_transaction_id: UUID | null;
+  event_id: UUID | null;
+  status: CorrelationStatus;
+  score: number;
+  window_seconds: number;
+  candidates_considered: number;
+  score_breakdown: Record<string, number>;
+  explanation: string;
+  correlated_at: ISODateTime;
+  reviewed_by_id: UUID | null;
+  reviewed_at: ISODateTime | null;
+  review_outcome: ReviewOutcome | null;
+  review_notes: string | null;
+}
+
+export interface CorrelationAccuracy {
+  total: number;
+  matched: number;
+  unmatched: number;
+  uncertain: number;
+  reviewed: number;
+  review_correct: number;
+  review_incorrect: number;
+  review_explained: number;
+  /** Null until a human has judged at least one result. */
+  accuracy: number | null;
+}
+
+export interface POSConfig {
+  store_id: UUID;
+  provider: string | null;
+  options: Record<string, unknown>;
+  available_providers: string[];
+}
+
+export interface POSImportResult {
+  created: number;
+  skipped: number;
+  store_id: UUID;
+  provider: string;
+}

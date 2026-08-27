@@ -4,10 +4,10 @@ Each milestone is implemented, tested and verified before the next begins.
 "Verified" means the tests pass **and** the behaviour was exercised against the
 running system.
 
-**Current state:** 530 backend tests pass, `ruff check` and `ruff format --check`
+**Current state:** 606 backend tests pass, `ruff check` and `ruff format --check`
 are clean across `backend`, `vision`, `scripts` and `training`, and the frontend
-typechecks and builds. Milestones 3-12, 14 and 17 are complete; 13 is partial;
-15 and 16 have not been started.
+typechecks and builds. Milestones 3-12, 14, 16 and 17 are complete; 13 is
+partial; 15 has not been started.
 
 | # | Milestone | Status | Verified by |
 |---|-----------|--------|-------------|
@@ -27,8 +27,8 @@ typechecks and builds. Milestones 3-12, 14 and 17 are complete; 13 is partial;
 | 13 | Event evidence | 🟡 Partial | Model and `record_evidence()` exist but **nothing calls them** — no snapshot or clip is captured yet |
 | 14 | Retail inventory | ✅ Done | 67 tests (`test_vision_inventory.py`, `test_inventory_api.py`); wired through `build_pipeline_config` |
 | 15 | Custom product detection | ⬜ Not started | `training/` is empty |
-| 16 | POS integration | ⬜ Not started | `vision/pos/` is a stub |
-| 17 | Dashboard | ✅ Done | 11 pages, realtime via WebSocket; typechecks and builds clean. **No frontend tests yet** |
+| 16 | POS integration | ✅ Done | 71 tests (`test_vision_pos.py`, `test_pos_api.py`); `POSSIBLE_INVENTORY_DISCREPANCY` can now fire |
+| 17 | Dashboard | ✅ Done | 12 pages, realtime via WebSocket; typechecks and builds clean. **No frontend tests yet** |
 
 ---
 
@@ -233,7 +233,7 @@ member tidying a display and a detector error all produce the same row.
 `nearby_track_keys` is recorded as context for a human reviewer, computed per
 shelf, and is explicitly not an attribution — see [`PRIVACY.md`](PRIVACY.md).
 
-`POSSIBLE_INVENTORY_DISCREPANCY` still cannot fire: it needs milestone 16.
+`POSSIBLE_INVENTORY_DISCREPANCY` could not fire until milestone 16.
 
 **Verification**
 
@@ -270,3 +270,114 @@ tenant isolation      -> list=0 byid=404 NOT_FOUND
 The two lines marked above are the ones the feature's credibility rests on: a
 shelf nobody has looked at, and a shelf somebody is standing in front of, both
 refuse to claim they are empty.
+
+---
+
+## Milestone 16 — POS integration ✅
+
+**Delivered**
+
+*Vision engine* (`vision/pos/`, no backend dependency)
+
+- Provider-agnostic sale records, so correlation never learns whether a sale
+  arrived from a CSV, a webhook or a vendor API
+- `POSProvider` ABC plus in-memory and CSV implementations, registered by key
+- `correlate()` — time, product and quantity signals combined into an
+  auditable score with a stored per-signal breakdown
+
+*Backend* — idempotent import with SKU and barcode resolution, correlation of
+pending shelf removals, the discrepancy inference, a human review loop, an
+accuracy summary, and 7 endpoints under `/pos`. Provider configuration lives
+in `Store.settings`, so no migration was needed.
+
+*Dashboard* — a Reconciliation page with the three outcomes, the score
+breakdown behind a disclosure, and the review form.
+
+**Coverage, which outranks everything else here**
+
+If the till was offline, "no sale was found" carries no information. Reported
+as `UNMATCHED` it would turn an afternoon of ordinary trading into a list of
+suspicions — worst of all for the customer whose POS integration is least
+reliable, which is exactly backwards.
+
+So `FetchResult` carries `complete` and `reason`, and an incomplete window
+yields `UNCERTAIN` with no inference. It can still confirm a match: absence of
+evidence is unusable, presence of it is not. A store that has never imported
+any POS data is treated the same way — it is not a store with no sales.
+
+**When a discrepancy is inferred**
+
+All four must hold: the change was a removal, coverage was complete, no
+plausible sale was found, and the observation's own confidence is at least
+0.5. `_should_infer` states these in one readable place and defers the middle
+two to correlation's `supports_inference` rather than restating them, so the
+two cannot drift apart.
+
+Even then the event is hedged: `is_inference` set, the inventory event in
+`source_event_ids`, severity `LOW`, and a summary written to survive being
+read aloud in a dispute.
+
+**What it refuses to conclude**
+
+| Situation | Result |
+|-----------|--------|
+| Till offline / export truncated | `UNCERTAIN`, no inference |
+| Store has never imported POS data | `UNCERTAIN`, no inference |
+| Observation confidence below 0.5 | Recorded, but no inference |
+| Stock arriving rather than leaving | Not correlated at all |
+| Voided, refunded or pending sale | Not a sale; cannot explain a change |
+| Unrecognised CSV status | `PENDING`, not assumed to be a sale |
+| Missing CSV export | Raises, rather than reporting zero sales |
+| Naive timestamp with no zone configured | Rejected, rather than guessed |
+
+**Measuring rather than assuming**
+
+Every result can be reviewed: `CORRECT`, `INCORRECT`, `EXPLAINED`, `UNCLEAR` —
+about whether the match was right, never about a person. `EXPLAINED` is
+counted separately, because "unmatched, and I know why" is not the system
+being wrong. Accuracy is null until a human has judged something; an
+unmeasured system must not report 0% or 100%.
+
+**Verification**
+
+```
+$ cd backend && python -m pytest
+606 passed
+
+$ python -m ruff check backend vision scripts training
+All checks passed!
+
+$ cd frontend && npm run typecheck && npm run build
+✓ built in 6.03s
+```
+
+Live against the running server + real PostgreSQL and Redis:
+
+```
+A. no till connected      -> UNCERTAIN inference=False   <- refuses to conclude
+   "Cannot say whether a sale explains this: no POS data has been imported..."
+B. sale explains it       -> MATCHED   score=0.84 inference=False
+   breakdown={'time': 0.83, 'product': 1.0, 'quantity': 0.5}
+C. till on, no sale near  -> UNMATCHED inference=True
+   event=POSSIBLE_INVENTORY_DISCREPANCY  is_inference=True  sources=1
+   rule=pos_correlation
+   "Stock left 'Aisle 3 top' at 18:38 and no matching sale was found within
+    120 seconds. This needs a human to check: restocking, staff moving
+    stock, an item put back elsewhere, a mis-scanned item or a detection
+    error all produce this result."
+   accusatory language: NONE
+D. low-confidence removal -> UNMATCHED inference=False   <- recorded, not concluded from
+E. review EXPLAINED       -> reviewed=1 explained=1 accuracy=None
+E. review twice           -> CONFLICT
+```
+
+Case C is the first time `POSSIBLE_INVENTORY_DISCREPANCY` has fired in this
+codebase. Cases A and D are the ones that matter more: the same shelf change,
+with the same missing sale, correctly refusing to conclude anything.
+
+71 of those tests are new, and most assert what the system refuses to do. A
+parametrised test drives every outcome shape and asserts no explanation ever
+contains *theft*, *steal*, *stolen*, *shoplift*, *criminal*, *guilty*,
+*suspect*, *culprit* or *dishonest*. Another asserts the correlation score is
+byte-identical with and without nearby track keys, because presence at a shelf
+is not evidence that a person moved the stock.
