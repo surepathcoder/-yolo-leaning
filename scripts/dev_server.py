@@ -38,9 +38,7 @@ def _python() -> str:
 
 def _health(port: int, timeout: float = 2.0) -> dict | None:
     try:
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/health", timeout=timeout
-        ) as response:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=timeout) as response:
             return json.loads(response.read())
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         return None
@@ -84,11 +82,15 @@ def start(port: int, reload: bool) -> int:
         health = _health(port, timeout=1.0)
         if health:
             print(f"Started on :{port} (pid {process.pid})")
-            print(f"  status={health['status']} database={health['database']} redis={health['redis']}")
+            print(
+                f"  status={health['status']} database={health['database']} redis={health['redis']}"
+            )
             return 0
         time.sleep(0.5)
 
-    print(f"Did not become healthy within 30s. Log:\n{LOG_FILE.read_text(encoding='utf-8')[-2000:]}")
+    print(
+        f"Did not become healthy within 30s. Log:\n{LOG_FILE.read_text(encoding='utf-8')[-2000:]}"
+    )
     return 1
 
 
