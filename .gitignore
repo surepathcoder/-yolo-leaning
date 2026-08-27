@@ -43,3 +43,6 @@ desktop.ini
 # Logs
 *.log
 data/*.log
+
+# Runtime
+data/.dev_server.pid
