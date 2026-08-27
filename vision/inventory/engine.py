@@ -41,7 +41,8 @@ from vision.inventory.occupancy import (
     ShelfDefinition,
     estimate_occupancy,
 )
-from vision.types import Detection
+from vision.types import Detection, TrackedObject
+from vision.zones.geometry import bbox_polygon_overlap_ratio
 
 #: How many consecutive agreeing readings confirm a new stable value.
 DEFAULT_STABILITY_SAMPLES = 2
@@ -195,9 +196,14 @@ class InventoryEngine:
         self,
         detections: list[Detection],
         timestamp: datetime,
-        nearby_track_keys: tuple[str, ...] = (),
+        tracks: list[TrackedObject] | None = None,
     ) -> list[InventoryObservation]:
-        """Read every shelf that is due, and report confirmed changes."""
+        """Read every shelf that is due, and report confirmed changes.
+
+        ``tracks`` is optional context. Where it is given, each observation
+        records which tracks were at *that* shelf -- computed per shelf, since
+        a track at the far end of the aisle is not context for this one.
+        """
         observations: list[InventoryObservation] = []
         for shelf_id, shelf in self._shelves.items():
             if not shelf.is_monitored:
@@ -207,7 +213,8 @@ class InventoryEngine:
                 continue
             state.last_sampled_at = timestamp
             reading = estimate_occupancy(shelf, detections, timestamp)
-            observations.extend(self._apply(shelf, state, reading, nearby_track_keys))
+            nearby = _tracks_at(shelf, tracks or [])
+            observations.extend(self._apply(shelf, state, reading, nearby))
         return observations
 
     def read(self, detections: list[Detection], timestamp: datetime) -> list[OccupancyReading]:
@@ -360,3 +367,18 @@ class InventoryEngine:
         for target in targets:
             if target in self._state:
                 self._state[target] = _ShelfState()
+
+
+def _tracks_at(shelf: ShelfDefinition, tracks: list[TrackedObject]) -> tuple[str, ...]:
+    """Track keys whose box overlaps this shelf at all.
+
+    Deliberately generous: this is context shown to a human deciding whether
+    to look at the footage, not an attribution. Being over-inclusive costs a
+    reviewer one extra glance; being under-inclusive hides the one clip that
+    explains what happened.
+    """
+    return tuple(
+        track.track_key
+        for track in tracks
+        if bbox_polygon_overlap_ratio(track.bbox.as_tuple(), shelf.polygon) > 0.0
+    )

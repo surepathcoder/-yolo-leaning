@@ -43,7 +43,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError, ConflictError, ErrorCode, NotFoundError
 from app.core.logging import get_logger
 from app.db.session import session_scope
-from app.models import Camera, CountingLine, Store, Zone
+from app.models import Camera, CountingLine, Shelf, Store, Zone
 from app.models.enums import CameraStatus, VideoSourceKind
 from app.services.cameras import build_video_source, record_status
 from app.services.events import ingest_vision_event
@@ -52,9 +52,10 @@ from vision.config import VisionConfig
 from vision.counting import LineDefinition
 from vision.detection import DetectionEngine, ModelLoadError, build_engine
 from vision.events import CallbackSink, EventEngine, default_rules
+from vision.inventory import ShelfDefinition
 from vision.pipelines import CameraPipeline, PipelineConfig, PipelineState
 from vision.types import ReferencePoint
-from vision.zones import ZoneDefinition, ZoneKind
+from vision.zones import GeometryError, ZoneDefinition, ZoneKind
 
 log = get_logger(__name__)
 
@@ -160,6 +161,47 @@ def build_line_definitions(
     return definitions
 
 
+def build_shelf_definitions(shelves: list[Shelf]) -> list[ShelfDefinition]:
+    """Translate shelf rows into the engine's plain definitions.
+
+    A shelf with unusable geometry is skipped with a loud log rather than
+    aborting the pipeline, for the same reason zones are: one badly drawn
+    shelf must not blind a camera to everything else it watches.
+    """
+    definitions: list[ShelfDefinition] = []
+    for shelf in shelves:
+        if shelf.polygon is None:
+            log.warning("shelf_skipped_no_polygon", shelf_id=str(shelf.id))
+            continue
+        try:
+            definitions.append(
+                ShelfDefinition(
+                    shelf_id=str(shelf.id),
+                    name=shelf.name,
+                    polygon=shelf.polygon,
+                    camera_id=str(shelf.camera_id) if shelf.camera_id else "camera",
+                    product_classes=frozenset(
+                        product.detection_class_name
+                        for product in shelf.products
+                        if product.detection_class_name
+                    ),
+                    baseline_occupancy=shelf.baseline_occupancy,
+                    low_threshold=shelf.low_threshold,
+                    empty_threshold=shelf.empty_threshold,
+                    sample_interval_seconds=float(shelf.sample_interval_seconds),
+                    is_active=shelf.is_active,
+                    monitoring_enabled=shelf.monitoring_enabled,
+                )
+            )
+        except (GeometryError, ValueError) as exc:
+            log.warning(
+                "shelf_skipped_invalid",
+                shelf_id=str(shelf.id),
+                error=str(exc)[:200],
+            )
+    return definitions
+
+
 def build_pipeline_config(session, camera: Camera) -> PipelineConfig:
     """Assemble everything the engine needs for one camera."""
     settings = get_settings()
@@ -188,6 +230,18 @@ def build_pipeline_config(session, camera: Camera) -> PipelineConfig:
         ).all()
     )
 
+    shelves = list(
+        session.scalars(
+            select(Shelf)
+            .where(
+                Shelf.camera_id == camera.id,
+                Shelf.deleted_at.is_(None),
+                Shelf.is_active.is_(True),
+            )
+            .options(selectinload(Shelf.products))
+        ).all()
+    )
+
     schedule = None
     if store is not None and store.operating_hours:
         from app.services.stores import build_schedule
@@ -205,6 +259,7 @@ def build_pipeline_config(session, camera: Camera) -> PipelineConfig:
         lines=build_line_definitions(
             lines, default_cooldown=float(settings.LINE_CROSSING_COOLDOWN_SECONDS)
         ),
+        shelves=build_shelf_definitions(shelves),
         schedule=schedule,
         confidence_threshold=camera.confidence_threshold,
         detect_classes=tuple(camera.detect_classes or ()),

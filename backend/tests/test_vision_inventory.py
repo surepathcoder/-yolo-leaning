@@ -20,7 +20,7 @@ from vision.inventory import (
     calibrate_baseline,
     estimate_occupancy,
 )
-from vision.types import BoundingBox, Detection
+from vision.types import BoundingBox, Detection, TrackedObject
 from vision.zones.geometry import GeometryError
 
 BASE = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -420,15 +420,43 @@ def test_reset_forgets_stable_state():
     assert eng.occupancy()["shelf-1"][0] is None
 
 
+def tracked(x1: float, y1: float, x2: float, y2: float, *, track_id: int = 7) -> TrackedObject:
+    return TrackedObject(
+        track_id=track_id,
+        class_id=0,
+        class_name="person",
+        camera_id="cam-1",
+        session_id="s",
+        bbox=BoundingBox(x1, y1, x2, y2),
+        confidence=0.9,
+        first_seen=BASE,
+        last_seen=BASE,
+    )
+
+
 def test_nearby_tracks_are_recorded_as_context_only():
     eng = engine()
     settle(eng, full_shelf(), BASE)
     t = BASE + timedelta(seconds=300)
+    at_shelf = [tracked(0.3, 0.35, 0.5, 0.65)]
     obs = []
     for i in range(2):
-        obs += eng.update([], t + timedelta(seconds=60 * i), nearby_track_keys=("cam-1:s:7",))
+        obs += eng.update([], t + timedelta(seconds=60 * i), tracks=at_shelf)
     assert obs
     assert obs[0].nearby_track_keys == ("cam-1:s:7",)
+
+
+def test_tracks_away_from_the_shelf_are_not_recorded():
+    """Context is per shelf: someone at the far end of the aisle is not it."""
+    eng = engine()
+    settle(eng, full_shelf(), BASE)
+    t = BASE + timedelta(seconds=300)
+    elsewhere = [tracked(0.0, 0.0, 0.1, 0.1)]
+    obs = []
+    for i in range(2):
+        obs += eng.update([], t + timedelta(seconds=60 * i), tracks=elsewhere)
+    assert obs
+    assert obs[0].nearby_track_keys == ()
 
 
 def test_observation_serialises_for_transport():

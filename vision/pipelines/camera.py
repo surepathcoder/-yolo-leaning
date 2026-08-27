@@ -38,6 +38,7 @@ from vision.events import (
     Severity,
     VisionEvent,
 )
+from vision.inventory import InventoryEngine, InventoryObservation, ShelfDefinition
 from vision.tracking import ByteTracker, build_tracker
 from vision.types import Detection, Frame, TrackedObject
 from vision.zones import ZoneDefinition, ZoneEngine, ZoneObservation
@@ -67,6 +68,9 @@ class PipelineConfig:
     camera_name: str = ""
     zones: list[ZoneDefinition] = field(default_factory=list)
     lines: list[LineDefinition] = field(default_factory=list)
+    #: Shelves this camera watches. Empty on a pure-security camera, which is
+    #: the common case -- the inventory engine then costs nothing per frame.
+    shelves: list[ShelfDefinition] = field(default_factory=list)
     schedule: OperatingSchedule | None = None
     #: Per-camera override of the global confidence threshold.
     confidence_threshold: float | None = None
@@ -140,6 +144,7 @@ class FrameResult:
     tracks: list[TrackedObject]
     zone_observations: list[ZoneObservation]
     crossings: list[CrossingObservation]
+    inventory_observations: list[InventoryObservation]
     events: list[VisionEvent]
     duration_ms: float
 
@@ -180,6 +185,7 @@ class CameraPipeline:
         )
         self.zone_engine = ZoneEngine(config.zones, camera_id=config.camera_id)
         self.line_counter = LineCounter(config.lines, camera_id=config.camera_id)
+        self.inventory_engine = InventoryEngine(config.shelves, camera_id=config.camera_id)
 
         self.reader = FrameReader(
             source,
@@ -321,6 +327,11 @@ class CameraPipeline:
 
         zone_observations = self.zone_engine.update(tracks, frame.timestamp)
         crossings = self.line_counter.update(tracks, frame.timestamp)
+        # Shelves are sampled on their own interval, so this is a cheap
+        # no-op on the vast majority of frames.
+        inventory_observations = self.inventory_engine.update(
+            detections, frame.timestamp, tracks=tracks
+        )
 
         context = RuleContext(
             camera_id=self.config.camera_id,
@@ -349,6 +360,7 @@ class CameraPipeline:
             tracks=tracks,
             zone_observations=zone_observations,
             crossings=crossings,
+            inventory_observations=inventory_observations,
             events=events,
             duration_ms=duration_ms,
         )
@@ -394,6 +406,7 @@ class CameraPipeline:
         self.config = config
         self.zone_engine.set_zones(config.zones)
         self.line_counter.set_lines(config.lines)
+        self.inventory_engine.set_shelves(config.shelves)
 
     def prune(self, now: datetime | None = None) -> None:
         """Drop state for tracks that are long gone."""
