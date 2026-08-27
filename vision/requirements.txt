@@ -1,0 +1,6 @@
+# Vision engine dependencies.
+# torch/torchvision are intentionally NOT pinned here: install the build that
+# matches your hardware first (CPU or CUDA) -- see docs/DEPLOYMENT.md.
+ultralytics==8.4.127
+opencv-python==5.0.0.93
+numpy==2.5.2

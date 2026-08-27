@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html.light {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-canvas text-slate-200 font-sans antialiased;
+    /* Prevent the layout shifting sideways when a page grows a scrollbar --
+       on an operations screen that jump is very noticeable. */
+    scrollbar-gutter: stable;
+  }
+
+  html.light body {
+    @apply bg-slate-50 text-slate-800;
+  }
+
+  /* A visible focus ring is not optional: an operator working an alert queue
+     under pressure navigates by keyboard. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-400 ring-offset-2 ring-offset-canvas;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-canvas-border;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-600;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-canvas-border bg-canvas-raised;
+  }
+
+  .card-header {
+    @apply flex items-center justify-between border-b border-canvas-border px-5 py-3.5;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2
+           text-sm font-medium transition-colors
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-500 active:bg-brand-700;
+  }
+
+  .btn-secondary {
+    @apply btn border border-canvas-border bg-canvas-overlay text-slate-200
+           hover:border-slate-600 hover:bg-canvas-border;
+  }
+
+  .btn-ghost {
+    @apply btn text-slate-400 hover:bg-canvas-overlay hover:text-slate-200;
+  }
+
+  .btn-danger {
+    @apply btn bg-severity-critical/90 text-white hover:bg-severity-critical;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-canvas-border bg-canvas px-3 py-2
+           text-sm text-slate-100 placeholder:text-slate-500
+           focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500
+           disabled:opacity-60;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-slate-400;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5
+           text-2xs font-semibold uppercase tracking-wide;
+  }
+
+  /* A table dense enough to read a shift's worth of events without scrolling
+     past the fold, but with enough row height to hit with a mouse. */
+  .data-table {
+    @apply w-full border-collapse text-sm;
+  }
+  .data-table th {
+    @apply border-b border-canvas-border px-4 py-2.5 text-left text-2xs
+           font-semibold uppercase tracking-wider text-slate-500;
+  }
+  .data-table td {
+    @apply border-b border-canvas-border/60 px-4 py-3 text-slate-300;
+  }
+  .data-table tbody tr {
+    @apply transition-colors hover:bg-canvas-overlay/60;
+  }
+}
+
+@layer utilities {
+  /* Marks an inferred conclusion. Deliberately distinct from every severity
+     colour so it reads as "this is a guess", not "this is urgent". */
+  .inference-mark {
+    @apply border-l-2 border-dashed border-violet-400/70 bg-violet-400/5;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

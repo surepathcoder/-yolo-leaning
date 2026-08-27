@@ -1,0 +1,40 @@
+# Infrastructure only (PostgreSQL + Redis) for local development where the
+# backend and frontend run directly on the host.
+#   docker compose -f deployment/docker/compose.infra.yml up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: visionguard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: visionguard
+      POSTGRES_PASSWORD: visionguard
+      POSTGRES_DB: visionguard
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U visionguard -d visionguard"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: visionguard-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
