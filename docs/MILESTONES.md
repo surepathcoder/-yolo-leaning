@@ -7,7 +7,7 @@ running system.
 **Current state:** the backend test suite passes, `ruff check` and
 `ruff format --check` are clean across `backend`, `vision`, `scripts` and
 `training`, and the frontend typechecks, builds and passes its Vitest suite.
-Milestones 3-17 are complete.
+Milestones 3-18 are complete.
 
 | # | Milestone | Status | Verified by |
 |---|-----------|--------|-------------|
@@ -29,6 +29,7 @@ Milestones 3-17 are complete.
 | 15 | Custom product detection | ✅ Done | `training/` tooling + a real short train; `test_models_api.py`, `test_models_service.py`, `test_vision_models.py`, `test_training.py`; second-pass detector feeds occupancy |
 | 16 | POS integration | ✅ Done | 71 tests (`test_vision_pos.py`, `test_pos_api.py`); `POSSIBLE_INVENTORY_DISCREPANCY` can now fire |
 | 17 | Dashboard | ✅ Done | 12 pages, realtime via WebSocket; typechecks and builds clean; 51 Vitest/RTL tests covering the API client, auth store, UI primitives, routing gate and the sign-in, models and shell pages |
+| 18 | Loss-prevention behaviour rules | ✅ Done | `test_loss_prevention_rules.py`; end-to-end synthetic pipeline test; `POSSIBLE_EXIT_WITHOUT_PAYMENT` needs zero per-shop training |
 
 ---
 
@@ -607,3 +608,56 @@ $ cd frontend && npm run typecheck && npm run build && npx vitest run
 Test Files  7 passed (7)
      Tests  51 passed (51)
 ```
+
+---
+
+## Milestone 18 — Loss-prevention behaviour rules ✅
+
+**Delivered**
+
+- `ExitWithoutCheckoutRule` (`vision/events/rules.py`) — the first rule in a
+  family of generic, zero-per-shop-training loss-prevention signals. Flags
+  `POSSIBLE_EXIT_WITHOUT_PAYMENT` when a person reaches a configured EXIT
+  zone with no recorded visit to a configured CHECKOUT zone on the same
+  camera this session. Pure zone geometry — `ZoneType.EXIT` and
+  `ZoneType.CHECKOUT` already existed in the schema; nothing consumed the
+  distinction until this milestone.
+- New event vocabulary entry `POSSIBLE_EXIT_WITHOUT_PAYMENT`, hedged and
+  added to `INFERENCE_EVENT_TYPES` in both the backend and vision enums, with
+  an alert label ("Possible exit without payment - review") — no frontend
+  changes needed, since the Events/Alerts pages, the zone-type dropdown and
+  the `/events/types` catalogue all already handle any zone type or event
+  type generically.
+
+**What it refuses to do**
+
+| Situation | Result |
+|-----------|--------|
+| No CHECKOUT zone configured on the camera | Silent — absence of a signal, not evidence |
+| Checkout zone fully visited before the exit | Silent |
+| Non-person reaches the exit zone | Ignored |
+| Cross-camera correlation | Not attempted — `track_key` is per-camera-session, no re-identification exists in this codebase |
+
+Full detail, including the deliberately deferred "concealment gesture"
+signal and why it needs its own milestone: [`docs/LOSS_PREVENTION.md`](LOSS_PREVENTION.md).
+
+**Verification**
+
+```
+$ cd backend && ../venv/Scripts/python -m pytest
+<suite passes, incl. test_loss_prevention_rules.py>
+
+$ python -m ruff check backend vision scripts training
+All checks passed!
+```
+
+`test_loss_prevention_rules.py` drives `ExitWithoutCheckoutRule` directly
+against hand-built `RuleContext`/`ZoneObservation` values — no database, the
+same no-DB-dependency style `vision/` is designed for — and covers the case
+that matters most: a store with no CHECKOUT zone configured must never have
+an exit flagged. `test_a_synthetic_pipeline_produces_events_and_alerts`
+(milestone 7's end-to-end test) was extended with a CHECKOUT zone off the
+synthetic object's path and an EXIT zone on it, proving the rule fires
+through the real `CameraPipeline` and escalates to a real alert, in the same
+run that already proves `RESTRICTED_AREA_ENTRY`, `LOITERING` and
+`LINE_CROSSED`.
