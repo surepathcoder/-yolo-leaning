@@ -6,8 +6,8 @@ running system.
 
 **Current state:** the backend test suite passes, `ruff check` and
 `ruff format --check` are clean across `backend`, `vision`, `scripts` and
-`training`, and the frontend typechecks and builds. Milestones 3-17 are
-complete.
+`training`, and the frontend typechecks, builds and passes its Vitest suite.
+Milestones 3-17 are complete.
 
 | # | Milestone | Status | Verified by |
 |---|-----------|--------|-------------|
@@ -28,7 +28,7 @@ complete.
 | 14 | Retail inventory | ✅ Done | 67 tests (`test_vision_inventory.py`, `test_inventory_api.py`); wired through `build_pipeline_config` |
 | 15 | Custom product detection | ✅ Done | `training/` tooling + a real short train; `test_models_api.py`, `test_models_service.py`, `test_vision_models.py`, `test_training.py`; second-pass detector feeds occupancy |
 | 16 | POS integration | ✅ Done | 71 tests (`test_vision_pos.py`, `test_pos_api.py`); `POSSIBLE_INVENTORY_DISCREPANCY` can now fire |
-| 17 | Dashboard | ✅ Done | 12 pages, realtime via WebSocket; typechecks and builds clean. **No frontend tests yet** |
+| 17 | Dashboard | ✅ Done | 12 pages, realtime via WebSocket; typechecks and builds clean; 51 Vitest/RTL tests covering the API client, auth store, UI primitives, routing gate and the sign-in, models and shell pages |
 
 ---
 
@@ -554,3 +554,56 @@ contains *theft*, *steal*, *stolen*, *shoplift*, *criminal*, *guilty*,
 *suspect*, *culprit* or *dishonest*. Another asserts the correlation score is
 byte-identical with and without nearby track keys, because presence at a shelf
 is not evidence that a person moved the stock.
+
+---
+
+## Milestone 17 — Dashboard test suite ✅
+
+The 12-page dashboard (routing, the auth gate, the API client, realtime
+connection and every page) shipped typechecked and building clean, but with no
+automated coverage — a regression in the token-refresh logic or the
+observation/inference badge would only be caught by hand. `frontend/tests/`
+closes that gap with Vitest + React Testing Library.
+
+**Delivered**
+
+- `tests/client.test.ts` — the two things `services/client.ts` exists for:
+  single-flight token refresh (two concurrent 401s trigger exactly one
+  `/auth/refresh` call, both original requests share and retry with the new
+  token), and that every failure becomes a typed `ApiError` with the
+  backend's `code` and field errors, never raw JSON.
+- `tests/auth-store.test.ts` — `login`/`logout`/`restore` state transitions,
+  including that a dead stored token is cleared rather than looping the app
+  between the dashboard and the login page.
+- `tests/primitives.test.tsx` — the formatting helpers every page leans on,
+  and `EventKindBadge`'s two branches: "an observation is not a conclusion"
+  is the platform's central rule, and it is now asserted on screen, not just
+  believed true of the database.
+- `tests/App.test.tsx` — `RequireAuth` actually redirects a signed-out
+  visitor away from the dashboard.
+- `tests/pages/Login.test.tsx` — sign-in, the 409 multi-organization
+  disambiguation flow described in the page's own header comment, and
+  registration.
+- `tests/pages/Models.test.tsx` — the milestone 15 UI: the mAP activation
+  gate disables (and explains) the Activate button, activating refreshes the
+  list, and the camera-assignment table is permission-gated.
+- `tests/components/AppShell.test.tsx` — navigation is filtered to exactly
+  the sections a user's permissions allow, and signing out clears the
+  session and returns to `/login`.
+
+**What it does not cover yet**
+
+Deep interaction tests for Analytics' charts, the LiveView player, and the
+Zones drawing canvas — the highest-effort, lowest-regression-risk surfaces.
+Added as the dashboard's untested area shrinks further, not required to call
+this milestone done.
+
+**Verification**
+
+```
+$ cd frontend && npm run typecheck && npm run build && npx vitest run
+...
+✓ built
+Test Files  7 passed (7)
+     Tests  51 passed (51)
+```
