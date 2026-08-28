@@ -10,6 +10,7 @@ from vision.events.engine import (
 from vision.events.rules import (
     AfterHoursRule,
     DwellThresholdRule,
+    ExitWithoutCheckoutRule,
     LineCrossingRule,
     LoiteringRule,
     OccupancyRule,
@@ -47,6 +48,7 @@ __all__ = [
     "EventEngine",
     "EventSink",
     "EventType",
+    "ExitWithoutCheckoutRule",
     "LineCrossingRule",
     "LoiteringRule",
     "OccupancyRule",

@@ -337,7 +337,9 @@ def test_a_synthetic_pipeline_produces_events_and_alerts(
 
     The detector is driven by the synthetic source's ground truth, so exactly
     what should happen is known: one person walks left to right through a
-    restricted zone and across a counting line.
+    restricted zone, across a counting line, past an (unvisited) checkout
+    zone and into an exit zone -- covering M18's exit-without-checkout rule
+    in the same real pipeline run as the original zone/line/loitering chain.
     """
     camera_id = ctx["camera"]["id"]
     client.post(
@@ -355,6 +357,29 @@ def test_a_synthetic_pipeline_produces_events_and_alerts(
         json={"name": "Door", "point_a": [0.55, 0.0], "point_b": [0.55, 1.0]},
         headers=ctx["headers"],
     )
+    # Off the object's fixed horizontal path (which stays at y=0.625): never
+    # visited, so the exit below must fire as unaccompanied by a checkout.
+    client.post(
+        f"/api/v1/cameras/{camera_id}/zones",
+        json={
+            "name": "Checkout counter",
+            "zone_type": "CHECKOUT",
+            "polygon": [[0.05, 0.02], [0.95, 0.02], [0.95, 0.15], [0.05, 0.15]],
+        },
+        headers=ctx["headers"],
+    )
+    # On the path, near its end: the object reaches this well within the
+    # 60-frame clip, with enough continuous presence to clear zone-entry
+    # debounce.
+    client.post(
+        f"/api/v1/cameras/{camera_id}/zones",
+        json={
+            "name": "Front door",
+            "zone_type": "EXIT",
+            "polygon": [[0.55, 0.55], [0.80, 0.55], [0.80, 0.70], [0.55, 0.70]],
+        },
+        headers=ctx["headers"],
+    )
 
     evidence_dir = tmp_path / "evidence"
     monkeypatch.setattr(get_settings(), "EVIDENCE_STORAGE_PATH", str(evidence_dir))
@@ -368,7 +393,10 @@ def test_a_synthetic_pipeline_produces_events_and_alerts(
     running = pipeline_manager.get(uuid.UUID(camera_id))
     assert running is not None
     deadline = time.time() + 30
-    while time.time() < deadline and running.events_ingested < 3:
+    # 4 distinct event types are expected chronologically before the object
+    # reaches the exit zone: restricted-area entry, loitering, line crossed,
+    # then possible-exit-without-payment.
+    while time.time() < deadline and running.events_ingested < 4:
         time.sleep(0.25)
 
     client.post(f"/api/v1/cameras/{camera_id}/pipeline/stop", headers=ctx["headers"])
@@ -378,6 +406,10 @@ def test_a_synthetic_pipeline_produces_events_and_alerts(
     assert EventType.RESTRICTED_AREA_ENTRY in types, f"got {types}"
     assert EventType.LOITERING in types
     assert EventType.LINE_CROSSED in types
+    assert EventType.POSSIBLE_EXIT_WITHOUT_PAYMENT in types, f"got {types}"
+
+    exit_event = next(e for e in events if e.event_type == EventType.POSSIBLE_EXIT_WITHOUT_PAYMENT)
+    assert exit_event.is_inference is True
 
     # Self-test events are stamped so nothing reads them as real observations.
     for event in events:

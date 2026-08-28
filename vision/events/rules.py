@@ -22,7 +22,7 @@ from datetime import datetime
 
 from vision.counting import CrossingObservation, Direction
 from vision.events.schedule import OperatingSchedule
-from vision.events.types import EventType, Severity, VisionEvent
+from vision.events.types import ConfidenceLevel, EventType, Severity, VisionEvent
 from vision.types import TrackedObject
 from vision.zones import ZoneDefinition, ZoneEventKind, ZoneKind, ZoneObservation
 
@@ -500,6 +500,106 @@ class OccupancyRule(Rule):
         return events
 
 
+# ---------------------------------------------------------------------------
+# Exit without a recorded checkout
+# ---------------------------------------------------------------------------
+
+
+class ExitWithoutCheckoutRule(Rule):
+    """Flags a person reaching an exit with no recorded checkout visit.
+
+    Pure zone geometry -- no product model, no per-shop training. It works
+    identically for any store the moment they draw a CHECKOUT zone and an
+    EXIT zone, exactly the way ``RESTRICTED_AREA_ENTRY`` needs no training.
+
+    With no CHECKOUT zone configured on the camera at all, the rule stays
+    silent rather than treating "we never asked" the same as "they skipped
+    it" -- a store that has not drawn a checkout zone must not have every
+    departure flagged. This mirrors the honesty rule ``vision/pos/
+    correlation.py`` applies to a store with no POS data imported.
+
+    Two further limits, both accepted and both shared with ``LoiteringRule``:
+    state is per-camera-session in memory, so it is lost on a pipeline
+    restart or reconnect (a customer who paid moments before a brief camera
+    drop could false-positive); and correlation is same-camera only, since
+    ``track_key`` is not stable across cameras -- this codebase has no
+    cross-camera re-identification.
+    """
+
+    name = "security.exit_without_checkout"
+
+    def __init__(self, *, severity: Severity = Severity.MEDIUM) -> None:
+        self.severity = severity
+        #: track_key -> when a completed checkout-zone visit was last seen.
+        self._checkout_seen: dict[str, datetime] = {}
+
+    def reset(self) -> None:
+        self._checkout_seen.clear()
+
+    def evaluate(self, context: RuleContext) -> list[VisionEvent]:
+        has_checkout_zone = any(zone.kind == ZoneKind.CHECKOUT for zone in context.zones.values())
+        events: list[VisionEvent] = []
+
+        for observation in context.zone_observations:
+            if observation.class_name != "person":
+                continue
+
+            # A completed pass through a checkout zone clears the flag for
+            # this track. EXITED, not ENTERED: walking towards the till is
+            # not the same as having been served at it.
+            if (
+                observation.zone_kind == ZoneKind.CHECKOUT
+                and observation.kind == ZoneEventKind.EXITED
+            ):
+                self._checkout_seen[observation.track_key] = observation.timestamp
+                continue
+
+            # ENTERED, not EXITED: the alert has to land while the person is
+            # still in the doorway for it to be actionable.
+            if (
+                has_checkout_zone
+                and observation.zone_kind == ZoneKind.EXIT
+                and observation.kind == ZoneEventKind.ENTERED
+                and observation.track_key not in self._checkout_seen
+            ):
+                events.append(
+                    VisionEvent(
+                        event_type=EventType.POSSIBLE_EXIT_WITHOUT_PAYMENT,
+                        severity=self.severity,
+                        camera_id=context.camera_id,
+                        store_id=context.store_id,
+                        zone_id=observation.zone_id,
+                        occurred_at=observation.timestamp,
+                        track_key=observation.track_key,
+                        track_id=observation.track_id,
+                        object_class=observation.class_name,
+                        confidence=observation.confidence,
+                        is_inference=True,
+                        confidence_level=ConfidenceLevel.MEDIUM,
+                        rule_name=self.name,
+                        # Neutral wording: an absence of a signal, not a verdict.
+                        summary=(
+                            f"Person (track {observation.track_id}) reached exit zone "
+                            f"'{observation.zone_name}' with no checkout zone visit "
+                            f"recorded on this camera this session."
+                        ),
+                        metadata={"zone_name": observation.zone_name},
+                    )
+                )
+                # Fire once per track, not once per frame in the exit zone.
+                self._checkout_seen[observation.track_key] = observation.timestamp
+
+        self._forget_departed(context)
+        return events
+
+    def _forget_departed(self, context: RuleContext) -> None:
+        """Clear state for tracks no longer active, so a return re-evaluates."""
+        live = {track.track_key for track in context.tracks}
+        for key in list(self._checkout_seen):
+            if key not in live:
+                del self._checkout_seen[key]
+
+
 def default_rules(
     *,
     loitering_threshold_seconds: float = 60.0,
@@ -513,4 +613,5 @@ def default_rules(
         DwellThresholdRule(dwell_threshold_seconds),
         AfterHoursRule(),
         OccupancyRule(),
+        ExitWithoutCheckoutRule(),
     ]

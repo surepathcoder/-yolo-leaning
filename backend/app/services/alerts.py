@@ -147,6 +147,7 @@ def build_title(event: Event, store_name: str | None = None) -> str:
         EventType.SHELF_EMPTY: "Shelf empty",
         EventType.PRODUCT_REMOVED: "Product removed from shelf",
         EventType.POSSIBLE_INVENTORY_DISCREPANCY: "Possible inventory discrepancy - review",
+        EventType.POSSIBLE_EXIT_WITHOUT_PAYMENT: "Possible exit without payment - review",
         EventType.POTENTIAL_SECURITY_CONCERN: "Potential security concern - review",
         EventType.CAMERA_OFFLINE: "Camera offline",
         EventType.PIPELINE_ERROR: "Camera processing error",

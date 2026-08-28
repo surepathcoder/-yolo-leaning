@@ -1323,6 +1323,7 @@ def upgrade() -> None:
                 "SHELF_EMPTY",
                 "SHELF_CHANGED",
                 "POSSIBLE_INVENTORY_DISCREPANCY",
+                "POSSIBLE_EXIT_WITHOUT_PAYMENT",
                 "POTENTIAL_SECURITY_CONCERN",
                 "CAMERA_ONLINE",
                 "CAMERA_OFFLINE",

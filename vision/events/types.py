@@ -45,6 +45,7 @@ class EventType(StrEnum):
 
     # inferences -- conclusions, not measurements
     POSSIBLE_INVENTORY_DISCREPANCY = "POSSIBLE_INVENTORY_DISCREPANCY"
+    POSSIBLE_EXIT_WITHOUT_PAYMENT = "POSSIBLE_EXIT_WITHOUT_PAYMENT"
     POTENTIAL_SECURITY_CONCERN = "POTENTIAL_SECURITY_CONCERN"
 
     # system
@@ -56,6 +57,7 @@ class EventType(StrEnum):
 INFERENCE_EVENT_TYPES = frozenset(
     {
         EventType.POSSIBLE_INVENTORY_DISCREPANCY,
+        EventType.POSSIBLE_EXIT_WITHOUT_PAYMENT,
         EventType.POTENTIAL_SECURITY_CONCERN,
     }
 )
