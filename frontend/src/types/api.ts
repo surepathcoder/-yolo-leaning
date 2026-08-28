@@ -177,6 +177,7 @@ export interface CameraSummary {
   is_enabled: boolean;
   last_seen_at: ISODateTime | null;
   measured_fps: number | null;
+  model_version_id: UUID | null;
 }
 
 export interface CameraStream {
@@ -616,6 +617,57 @@ export interface InventoryEvent {
   track_key: string | null;
   occurred_at: ISODateTime;
   event_metadata: Record<string, unknown>;
+}
+
+export interface ProductDetection {
+  id: UUID;
+  camera_id: UUID | null;
+  shelf_id: UUID | null;
+  product_id: UUID | null;
+  model_version_id: UUID | null;
+  class_name: string;
+  confidence: number;
+  bbox_x1: number;
+  bbox_y1: number;
+  bbox_x2: number;
+  bbox_y2: number;
+  detected_at: ISODateTime;
+}
+
+// -------------------------------------------------------------- custom models
+export type ModelStatus =
+  | "DRAFT"
+  | "TRAINING"
+  | "VALIDATED"
+  | "ACTIVE"
+  | "ARCHIVED"
+  | "FAILED";
+
+export interface ModelVersion {
+  id: UUID;
+  organization_id: UUID | null;
+  name: string;
+  version: string;
+  task: string;
+  status: ModelStatus;
+  class_names: string[];
+  map50: number | null;
+  map50_95: number | null;
+  trained_at: ISODateTime | null;
+  activated_at: ISODateTime | null;
+  created_at: ISODateTime;
+  /** True when this model clears the activation mAP gate. */
+  activatable: boolean;
+  // present on the detail read
+  base_model?: string | null;
+  image_size?: number;
+  checksum?: string | null;
+  metrics?: Record<string, unknown>;
+  dataset_name?: string | null;
+  dataset_size?: number | null;
+  training_config?: Record<string, unknown>;
+  notes?: string | null;
+  camera_ids?: UUID[];
 }
 
 // ----------------------------------------------------------------------- pos

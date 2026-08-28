@@ -207,6 +207,7 @@ cd backend
 | [EVENT_ENGINE.md](docs/EVENT_ENGINE.md) | Rules, event types, severity |
 | [EVIDENCE.md](docs/EVIDENCE.md) | Snapshot / clip capture, delivery and retention |
 | [INVENTORY.md](docs/INVENTORY.md) | Shelf occupancy and stock intelligence |
+| [CUSTOM_MODELS.md](docs/CUSTOM_MODELS.md) | Training and running per-retailer product models |
 | [POS_INTEGRATION.md](docs/POS_INTEGRATION.md) | POS providers and correlation |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | CPU, GPU and edge deployment |
 | [EDGE_AI.md](docs/EDGE_AI.md) | Offline-first edge architecture |

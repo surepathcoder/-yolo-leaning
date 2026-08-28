@@ -29,6 +29,7 @@ import type {
   InventorySnapshot,
   InventorySummary,
   LoginResponse,
+  ModelVersion,
   OperatingHours,
   Page,
   PipelineStatus,
@@ -37,6 +38,7 @@ import type {
   POSImportResult,
   POSTransaction,
   Product,
+  ProductDetection,
   RegisterResponse,
   ReviewOutcome,
   SessionInfo,
@@ -295,6 +297,35 @@ export const inventoryApi = {
     limit?: number;
     offset?: number;
   }) => api.get<Page<InventoryEvent>>("/inventory/events", params),
+
+  productDetections: (params?: {
+    camera_id?: UUID;
+    shelf_id?: UUID;
+    product_id?: UUID;
+    since?: string;
+    limit?: number;
+    offset?: number;
+  }) => api.get<Page<ProductDetection>>("/inventory/product-detections", params),
+};
+
+// -------------------------------------------------------------- custom models
+export const modelApi = {
+  list: (params?: { status?: string; name?: string }) =>
+    api.get<ModelVersion[]>("/models", params),
+
+  get: (id: UUID) => api.get<ModelVersion>(`/models/${id}`),
+
+  activate: (id: UUID) => api.post<ModelVersion>(`/models/${id}/activate`),
+
+  archive: (id: UUID) => api.post<ModelVersion>(`/models/${id}/archive`),
+
+  remove: (id: UUID) => api.delete<{ message: string }>(`/models/${id}`),
+
+  assignCamera: (id: UUID, cameraId: UUID) =>
+    api.put<{ message: string }>(`/models/${id}/cameras/${cameraId}`),
+
+  unassignCamera: (id: UUID, cameraId: UUID) =>
+    api.delete<{ message: string }>(`/models/${id}/cameras/${cameraId}`),
 };
 
 // ----------------------------------------------------------------------- pos

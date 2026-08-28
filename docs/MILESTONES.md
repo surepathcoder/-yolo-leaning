@@ -4,10 +4,10 @@ Each milestone is implemented, tested and verified before the next begins.
 "Verified" means the tests pass **and** the behaviour was exercised against the
 running system.
 
-**Current state:** 636 backend tests pass, `ruff check` and `ruff format --check`
-are clean across `backend`, `vision`, `scripts` and `training`, and the frontend
-typechecks and builds. Milestones 3-14, 16 and 17 are complete; 15 has not been
-started.
+**Current state:** the backend test suite passes, `ruff check` and
+`ruff format --check` are clean across `backend`, `vision`, `scripts` and
+`training`, and the frontend typechecks and builds. Milestones 3-17 are
+complete.
 
 | # | Milestone | Status | Verified by |
 |---|-----------|--------|-------------|
@@ -26,7 +26,7 @@ started.
 | 12 | Alert engine | ✅ Done | `test_events_alerts.py`; notification channels |
 | 13 | Event evidence | ✅ Done | 45 tests (`test_vision_evidence.py`, `test_evidence_service.py`, `test_evidence_api.py`); snapshot + thumbnail + clip captured and served, audited, swept |
 | 14 | Retail inventory | ✅ Done | 67 tests (`test_vision_inventory.py`, `test_inventory_api.py`); wired through `build_pipeline_config` |
-| 15 | Custom product detection | ⬜ Not started | `training/` is empty |
+| 15 | Custom product detection | ✅ Done | `training/` tooling + a real short train; `test_models_api.py`, `test_models_service.py`, `test_vision_models.py`, `test_training.py`; second-pass detector feeds occupancy |
 | 16 | POS integration | ✅ Done | 71 tests (`test_vision_pos.py`, `test_pos_api.py`); `POSSIBLE_INVENTORY_DISCREPANCY` can now fire |
 | 17 | Dashboard | ✅ Done | 12 pages, realtime via WebSocket; typechecks and builds clean. **No frontend tests yet** |
 
@@ -356,6 +356,93 @@ tenant isolation      -> list=0 byid=404 NOT_FOUND
 The two lines marked above are the ones the feature's credibility rests on: a
 shelf nobody has looked at, and a shelf somebody is standing in front of, both
 refuse to claim they are empty.
+
+---
+
+## Milestone 15 — Custom product detection ✅
+
+**Delivered**
+
+*`training/`* (no backend or web-framework dependency)
+
+- `datasets.py` — strict validation of a YOLO-format dataset: every image has a
+  label, every class id is in range, every box is normalised, both splits are
+  non-empty. A dataset that trains "fine" but has an unlabelled image produces a
+  model that quietly ignores real stock; that is caught here, before the run.
+- `train.py` — wraps Ultralytics, tuned for CPU (`imgsz=320`, augmentation off
+  for a tiny set). Returns a plain `TrainingResult` with the weights path, the
+  class names in id order, and the validation metrics.
+- `register.py` — turns that into the payload `models.register_model` accepts.
+- A bundled synthetic dataset (`samples/products/`, "cartons" on a shelf) so
+  the test suite does a real short training run in CI.
+
+*Backend*
+
+- `services/models.py` — register (weights on disk by a relative path + SHA-256,
+  same discipline as evidence), list (own org **plus** shared), **activate**,
+  archive, delete, assign-to-camera. Activation is the gate that matters: a
+  model with no metrics, or `map50` below `MODEL_MIN_MAP50`, is refused, and
+  activating one version archives the previous active one — one active per name.
+- `pipeline_manager` builds a `ProductModelConfig` for a camera whose assigned
+  model is `ACTIVE`, same-org and checksum-verified. A missing / stale / wrong-org
+  model logs loudly and the camera keeps running on COCO — a bad model must not
+  blind a camera.
+- 7 endpoints under `/models`, plus `GET /inventory/product-detections`.
+
+*Vision* — `CameraPipeline` runs the custom model as a **second pass** on its
+own interval (`MODEL_DETECTION_INTERVAL_SECONDS`). Its boxes are merged into the
+detections the occupancy engine sees — so a shelf is measured by real product
+class — but never reach the security rules. A carton in a restricted zone
+raises nothing.
+
+**What it refuses to do**
+
+| Situation | Result |
+|-----------|--------|
+| Model has no validation metrics | Stays `DRAFT`; cannot be activated |
+| `map50` below `MODEL_MIN_MAP50` (0.30) | Activation refused |
+| Model belongs to another organization | Will not load; not listed; 404 by id |
+| Weights file no longer matches its checksum | Will not load |
+| Assigned model is not `ACTIVE` | Assignment refused |
+| Product box in a restricted zone | Not an event — feeds occupancy only |
+| Assigned model missing at pipeline start | Camera runs on COCO, logs why |
+
+Full detail: [`docs/CUSTOM_MODELS.md`](CUSTOM_MODELS.md).
+
+**Verification**
+
+```
+$ cd backend && python -m pytest
+<suite passes, incl. test_models_api.py, test_models_service.py,
+ test_vision_models.py, test_training.py>
+
+$ python -m ruff check backend vision scripts training
+All checks passed!
+
+$ cd frontend && npm run typecheck && npm run build
+✓ built
+```
+
+`test_training.py` fine-tunes a nano model on the bundled dataset for a handful
+of epochs and asserts the result is registrable — weights produced, loadable,
+metrics extracted. `test_vision_models.py` drives a real `CameraPipeline` with a
+scripted product detector and asserts the two rules that matter: the product
+boxes feed occupancy, and the security rules never see them.
+
+Live against a running uvicorn (SQLite, as in M13):
+
+```
+train sample model (40 epochs, CPU)   -> best.pt  map50=0.883  map50-95=0.800
+                                         detects [blue_carton, red_carton, red_carton] on a held-out image
+POST /models  (register v1)           -> 201 status=VALIDATED activatable=true
+POST /models/{weak}/activate (map50 0.20) -> 409   <- below MODEL_MIN_MAP50
+POST /models/{v1}/activate            -> 200 status=ACTIVE
+POST /models/{v2}/activate            -> 200, v1 is now ARCHIVED   <- one active per name
+PUT  /models/{other-org}/cameras/{cam} -> 404      <- not this org's model
+PUT  /models/{v2}/cameras/{cam}       -> 200, camera.model_version_id set
+GET  /models/{v1}  as another org     -> 404
+GET  /inventory/product-detections    -> 200
+```
 
 ---
 

@@ -186,9 +186,10 @@ EMPTY forever, so the API rejects it.
 Attaching products is optional. A shelf with no products measures *anything
 that is not an occluder*, which is the right default for a generic model on an
 unlabelled shelf — a box is a box. Attaching products whose
-`detection_class_name` is set narrows measurement to those classes, and that
-field is only populated once a model exists that can recognise them
-([milestone 15](MILESTONES.md)).
+`detection_class_name` is set narrows measurement to those classes. That field
+is populated once a custom model is trained and assigned to the camera
+([`CUSTOM_MODELS.md`](CUSTOM_MODELS.md)); the model runs as a second detection
+pass and its product boxes flow into the same occupancy measurement.
 
 Shelf geometry is validated at the API with the same functions the engine uses
 at runtime. A shape the engine could not measure is rejected with an
