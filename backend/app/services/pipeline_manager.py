@@ -32,6 +32,7 @@ the real world.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -45,9 +46,11 @@ from app.core.config import get_settings
 from app.core.errors import AppError, ConflictError, ErrorCode, NotFoundError
 from app.core.logging import get_logger
 from app.db.session import session_scope
-from app.models import Camera, CountingLine, Event, Shelf, Store, Zone
-from app.models.enums import CameraStatus, EvidenceKind, VideoSourceKind
+from app.models import Camera, CountingLine, Event, ModelVersion, Shelf, Store, Zone
+from app.models.enums import CameraStatus, EvidenceKind, ModelStatus, VideoSourceKind
 from app.services import evidence as evidence_service
+from app.services import inventory as inventory_service
+from app.services import models as models_service
 from app.services.cameras import build_video_source, record_status
 from app.services.events import ingest_vision_event, make_dedupe_key, publish_event_update
 from vision.cameras import VideoSourceError
@@ -57,7 +60,7 @@ from vision.detection import DetectionEngine, ModelLoadError, build_engine
 from vision.events import CallbackSink, EventEngine, default_rules
 from vision.evidence import EvidenceSettings
 from vision.inventory import ShelfDefinition
-from vision.pipelines import CameraPipeline, PipelineConfig, PipelineState
+from vision.pipelines import CameraPipeline, PipelineConfig, PipelineState, ProductModelConfig
 from vision.types import ReferencePoint
 from vision.zones import GeometryError, ZoneDefinition, ZoneKind
 
@@ -218,6 +221,57 @@ def build_evidence_settings(settings) -> EvidenceSettings:
     )
 
 
+def build_product_model_config(session, camera: Camera) -> ProductModelConfig | None:
+    """The custom product model for a camera, if one is assigned and usable.
+
+    Returns ``None`` -- and logs why -- for a model that is missing, not
+    ``ACTIVE``, belongs to another organization, or whose weights file no
+    longer matches its recorded checksum. The camera then runs on the shared
+    COCO model, exactly as it did before a model was assigned; a bad model
+    must not blind a camera.
+    """
+    if camera.model_version_id is None:
+        return None
+    if camera.source_kind == VideoSourceKind.SYNTHETIC:
+        # A self-test camera is paired with a scripted detector -- running a
+        # real product model over generated rectangles would detect nothing.
+        return None
+
+    settings = get_settings()
+    model = session.get(ModelVersion, camera.model_version_id)
+    if model is None:
+        log.warning("product_model_missing", camera_id=str(camera.id))
+        return None
+    if model.status != ModelStatus.ACTIVE:
+        log.warning("product_model_not_active", camera_id=str(camera.id), status=model.status.value)
+        return None
+    if model.organization_id not in (None, camera.organization_id):
+        log.error(
+            "product_model_wrong_org",
+            camera_id=str(camera.id),
+            model_org=str(model.organization_id),
+        )
+        return None
+
+    weights = models_service.weights_file_path(model)
+    if weights is None:
+        log.error("product_model_weights_missing", model_id=str(model.id))
+        return None
+    digest = hashlib.sha256(weights.read_bytes()).hexdigest()
+    if model.checksum and digest != model.checksum:
+        log.error("product_model_checksum_mismatch", model_id=str(model.id))
+        return None
+
+    return ProductModelConfig(
+        model_version_id=str(model.id),
+        weights_path=str(weights),
+        class_names=tuple(model.class_names or ()),
+        image_size=model.image_size,
+        confidence=camera.confidence_threshold or settings.YOLO_CONFIDENCE_THRESHOLD,
+        interval_seconds=settings.MODEL_DETECTION_INTERVAL_SECONDS,
+    )
+
+
 def build_pipeline_config(session, camera: Camera) -> PipelineConfig:
     """Assemble everything the engine needs for one camera."""
     settings = get_settings()
@@ -278,6 +332,7 @@ def build_pipeline_config(session, camera: Camera) -> PipelineConfig:
         shelves=build_shelf_definitions(shelves),
         schedule=schedule,
         evidence=build_evidence_settings(settings),
+        product_model=build_product_model_config(session, camera),
         confidence_threshold=camera.confidence_threshold,
         detect_classes=tuple(camera.detect_classes or ()),
     )
@@ -320,6 +375,7 @@ class RunningPipeline:
     ingest_failures: int = 0
     evidence_stored: int = 0
     evidence_failures: int = 0
+    product_detections_recorded: int = 0
     #: Evidence storage (file write + DB row) runs here, off the frame thread:
     #: encoding is already done, and a slow disk must not cost frames.
     evidence_executor: ThreadPoolExecutor | None = None
@@ -560,6 +616,46 @@ class PipelineManager:
                     error=str(exc)[:200],
                 )
 
+        def on_frame(result) -> None:
+            """Persist the custom model's detections. Called on the frame thread.
+
+            The product model runs on its own interval, so this is a no-op on
+            almost every frame. Failures are recorded and swallowed.
+            """
+            if not result.product_detections:
+                return
+            model_id = (
+                uuid.UUID(pipeline_config.product_model.model_version_id)
+                if pipeline_config.product_model
+                else None
+            )
+            try:
+                with session_scope() as worker_session:
+                    count = inventory_service.record_product_detections(
+                        worker_session,
+                        organization_id=organization_id,
+                        camera_id=camera_id,
+                        model_version_id=model_id,
+                        detections=[
+                            {
+                                "class_name": d.class_name,
+                                "confidence": d.confidence,
+                                "bbox": d.bbox.as_tuple(),
+                            }
+                            for d in result.product_detections
+                        ],
+                        detected_at=result.frame.timestamp,
+                    )
+                running = running_ref["value"]
+                if running is not None:
+                    running.product_detections_recorded += count
+            except Exception as exc:
+                log.error(
+                    "product_detection_persist_failed",
+                    camera_id=str(camera_id),
+                    error=str(exc)[:200],
+                )
+
         event_engine = EventEngine(
             rules=default_rules(
                 loitering_threshold_seconds=vision_config.loitering_threshold_seconds
@@ -572,6 +668,12 @@ class PipelineManager:
             if is_self_test
             else self.detector(vision_config)
         )
+        # The pipeline builds its own product detector from
+        # config.product_model (a small ~5 MB YOLO model), so a live model swap
+        # via apply_config works without the manager holding a cache.
+        # build_pipeline_config already leaves product_model None for a
+        # self-test camera.
+        has_product_model = pipeline_config.product_model is not None
 
         pipeline = CameraPipeline(
             pipeline_config,
@@ -581,6 +683,7 @@ class PipelineManager:
             vision_config=vision_config,
             on_state_change=on_state_change,
             on_evidence=on_evidence,
+            on_frame=on_frame if has_product_model else None,
         )
 
         running = RunningPipeline(
@@ -664,6 +767,7 @@ class PipelineManager:
                 "ingest_failures": running.ingest_failures,
                 "evidence_stored": running.evidence_stored,
                 "evidence_failures": running.evidence_failures,
+                "product_detections_recorded": running.product_detections_recorded,
                 "started_at": running.started_at.isoformat(),
             }
             for running in pipelines

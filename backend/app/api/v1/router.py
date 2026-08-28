@@ -11,6 +11,7 @@ from app.api.v1 import (
     events,
     evidence,
     inventory,
+    models,
     pos,
     stores,
     system,
@@ -25,6 +26,7 @@ api_router.include_router(zones.router)
 api_router.include_router(events.router)
 api_router.include_router(evidence.router)
 api_router.include_router(inventory.router)
+api_router.include_router(models.router)
 api_router.include_router(pos.router)
 api_router.include_router(alerts.router)
 api_router.include_router(system.router)

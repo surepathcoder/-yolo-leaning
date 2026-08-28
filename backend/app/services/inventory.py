@@ -37,6 +37,7 @@ from app.models import (
     InventoryEvent,
     InventorySnapshot,
     Product,
+    ProductDetection,
     Shelf,
 )
 from app.models.enums import AuditAction, InventoryEventType, OccupancyLevel
@@ -527,6 +528,93 @@ def record_event(
         occupancy_after=occupancy_after,
     )
     return event
+
+
+def record_product_detections(
+    session: Session,
+    *,
+    organization_id: uuid.UUID,
+    camera_id: uuid.UUID,
+    model_version_id: uuid.UUID | None,
+    detections: list[dict],
+    detected_at: datetime,
+    shelf_id: uuid.UUID | None = None,
+) -> int:
+    """Persist one frame's worth of custom-model product detections.
+
+    Scope-free on purpose: this is called from the pipeline thread, which has
+    no user -- the same shape as ``events.persist_vision_event``. ``product_id``
+    is resolved by matching the model's class name to a catalogue product's
+    ``detection_class_name`` within the organization.
+
+    ``detections`` items: ``{"class_name", "confidence", "bbox": (x1,y1,x2,y2)}``
+    in normalised coordinates.
+    """
+    if not detections:
+        return 0
+
+    class_names = {d["class_name"] for d in detections}
+    product_by_class = {
+        product.detection_class_name: product.id
+        for product in session.scalars(
+            select(Product).where(
+                Product.organization_id == organization_id,
+                Product.detection_class_name.in_(class_names),
+                Product.deleted_at.is_(None),
+            )
+        )
+    }
+
+    for det in detections:
+        x1, y1, x2, y2 = det["bbox"]
+        session.add(
+            ProductDetection(
+                organization_id=organization_id,
+                shelf_id=shelf_id,
+                camera_id=camera_id,
+                product_id=product_by_class.get(det["class_name"]),
+                model_version_id=model_version_id,
+                class_name=det["class_name"],
+                confidence=float(det["confidence"]),
+                bbox_x1=float(x1),
+                bbox_y1=float(y1),
+                bbox_x2=float(x2),
+                bbox_y2=float(y2),
+                detected_at=detected_at,
+            )
+        )
+    session.flush()
+    return len(detections)
+
+
+def list_product_detections(
+    session: Session,
+    scope: TenantScope,
+    *,
+    camera_id: uuid.UUID | None = None,
+    shelf_id: uuid.UUID | None = None,
+    product_id: uuid.UUID | None = None,
+    since: datetime | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[ProductDetection], int]:
+    scope.require(Permission.INVENTORY_READ)
+    # ProductDetection has no store_id; scope.apply filters on organization only.
+    statement = scope.apply(select(ProductDetection), ProductDetection)
+    if camera_id is not None:
+        statement = statement.where(ProductDetection.camera_id == camera_id)
+    if shelf_id is not None:
+        statement = statement.where(ProductDetection.shelf_id == shelf_id)
+    if product_id is not None:
+        statement = statement.where(ProductDetection.product_id == product_id)
+    if since is not None:
+        statement = statement.where(ProductDetection.detected_at >= since)
+
+    total = session.scalar(select(func.count()).select_from(statement.subquery()))
+    rows = session.scalars(
+        statement.order_by(ProductDetection.detected_at.desc()).limit(limit).offset(offset)
+    ).all()
+    return list(rows), int(total or 0)
 
 
 def list_snapshots(

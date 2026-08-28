@@ -175,6 +175,8 @@ class CameraRead(APISchema):
     detection_enabled: bool
     confidence_threshold: float | None
     detect_classes: list
+    #: Custom product-detection model assigned to this camera (milestone 15).
+    model_version_id: uuid.UUID | None = None
     settings: dict
 
     status: CameraStatus
@@ -199,6 +201,8 @@ class CameraSummary(APISchema):
     is_enabled: bool
     last_seen_at: datetime | None
     measured_fps: float | None
+    #: Custom product-detection model assigned to this camera, if any.
+    model_version_id: uuid.UUID | None = None
 
 
 class ConnectionTestResult(BaseModel):
@@ -269,6 +273,7 @@ def build_camera_read(camera) -> CameraRead:
         detection_enabled=camera.detection_enabled,
         confidence_threshold=camera.confidence_threshold,
         detect_classes=list(camera.detect_classes or []),
+        model_version_id=camera.model_version_id,
         settings=dict(camera.settings or {}),
         status=camera.status,
         last_seen_at=camera.last_seen_at,

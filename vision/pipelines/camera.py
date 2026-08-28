@@ -29,7 +29,7 @@ from enum import StrEnum
 from vision.cameras import FrameReader, SourceState, VideoSource
 from vision.config import VisionConfig
 from vision.counting import CrossingObservation, LineCounter, LineDefinition
-from vision.detection import DetectionEngine, DetectionError
+from vision.detection import DetectionEngine, DetectionError, YOLODetectionEngine
 from vision.events import (
     EventEngine,
     EventType,
@@ -43,6 +43,25 @@ from vision.inventory import InventoryEngine, InventoryObservation, ShelfDefinit
 from vision.tracking import ByteTracker, build_tracker
 from vision.types import Detection, Frame, TrackedObject
 from vision.zones import ZoneDefinition, ZoneEngine, ZoneObservation
+
+
+@dataclass(frozen=True, slots=True)
+class ProductModelConfig:
+    """A custom product-detection model bound to one camera (milestone 15).
+
+    Assembled by the backend from an ``ACTIVE`` :class:`ModelVersion` after it
+    has verified the weights' checksum. The pipeline just loads the path it is
+    given and runs it as a second pass on its own interval -- stock does not
+    move frame to frame, so this runs far less often than the security
+    detector.
+    """
+
+    model_version_id: str
+    weights_path: str
+    class_names: tuple[str, ...] = ()
+    image_size: int = 640
+    confidence: float = 0.35
+    interval_seconds: float = 5.0
 
 
 class PipelineState(StrEnum):
@@ -77,6 +96,9 @@ class PipelineConfig:
     #: default: a pipeline with no evidence sink wired has nothing to do with
     #: the artefacts.
     evidence: EvidenceSettings = field(default_factory=EvidenceSettings)
+    #: A custom product-detection model, when one is assigned to this camera.
+    #: ``None`` on the overwhelming majority of cameras.
+    product_model: ProductModelConfig | None = None
     #: Per-camera override of the global confidence threshold.
     confidence_threshold: float | None = None
     #: Restrict detection to these class names. Empty = all.
@@ -152,6 +174,9 @@ class FrameResult:
     inventory_observations: list[InventoryObservation]
     events: list[VisionEvent]
     duration_ms: float
+    #: Boxes from the custom product model, on frames where it ran (it runs on
+    #: its own interval, not every frame). Empty otherwise.
+    product_detections: list[Detection] = field(default_factory=list)
 
 
 class CameraPipeline:
@@ -169,6 +194,7 @@ class CameraPipeline:
         on_state_change: Callable[[PipelineState, str | None], None] | None = None,
         on_frame: Callable[[FrameResult], None] | None = None,
         on_evidence: Callable[[EvidenceArtifact], None] | None = None,
+        product_detector: DetectionEngine | None = None,
     ) -> None:
         self.config = config
         self.source = source
@@ -178,6 +204,14 @@ class CameraPipeline:
         self.on_state_change = on_state_change
         self.on_frame = on_frame
         self.on_evidence = on_evidence
+
+        # A test can inject a scripted product detector; otherwise it is built
+        # from config.product_model when one is present.
+        self._product_detector_override = product_detector
+        self.product_detector = product_detector or self._build_product_detector(
+            config.product_model
+        )
+        self._last_product_run: datetime | None = None
 
         self.state = PipelineState.IDLE
         self.stats = PipelineStats()
@@ -335,12 +369,18 @@ class CameraPipeline:
                 self._seen_tracks.add(track.track_key)
                 self.stats.tracks_seen += 1
 
+        # The custom product model, when assigned, runs on its own interval --
+        # stock does not move frame to frame. Its boxes feed the occupancy
+        # engine (which filters by product class) but never the security rules:
+        # a carton is not a person.
+        product_detections = self._run_product_detector(frame)
+
         zone_observations = self.zone_engine.update(tracks, frame.timestamp)
         crossings = self.line_counter.update(tracks, frame.timestamp)
         # Shelves are sampled on their own interval, so this is a cheap
         # no-op on the vast majority of frames.
         inventory_observations = self.inventory_engine.update(
-            detections, frame.timestamp, tracks=tracks
+            detections + product_detections, frame.timestamp, tracks=tracks
         )
 
         context = RuleContext(
@@ -379,6 +419,7 @@ class CameraPipeline:
             inventory_observations=inventory_observations,
             events=events,
             duration_ms=duration_ms,
+            product_detections=product_detections,
         )
         if self.on_frame is not None:
             # A live viewer must not stop frames being processed.
@@ -395,6 +436,42 @@ class CameraPipeline:
                 if seconds is not None:
                     dwell[(zone_id, track_key)] = seconds
         return dwell
+
+    # -------------------------------------------------------- product model
+    def _build_product_detector(self, config: ProductModelConfig | None) -> DetectionEngine | None:
+        if config is None:
+            return None
+        return YOLODetectionEngine(
+            VisionConfig(
+                model_path=config.weights_path,
+                classes=tuple(config.class_names),
+                image_size=config.image_size,
+                confidence_threshold=config.confidence,
+                device=self.vision_config.device,
+            )
+        )
+
+    def _run_product_detector(self, frame: Frame) -> list[Detection]:
+        """Run the custom model if one is set and its interval has elapsed."""
+        detector = self.product_detector
+        product_config = self.config.product_model
+        if detector is None or frame.is_empty:
+            return []
+
+        interval = product_config.interval_seconds if product_config else 0.0
+        if (
+            self._last_product_run is not None
+            and (frame.timestamp - self._last_product_run).total_seconds() < interval
+        ):
+            return []
+        self._last_product_run = frame.timestamp
+
+        try:
+            return detector.detect(frame)
+        except DetectionError as exc:
+            self.stats.errors += 1
+            self.stats.last_error = f"product model: {exc}"[:200]
+            return []
 
     # -------------------------------------------------------------- evidence
     def _build_evidence_capturer(self, settings: EvidenceSettings) -> EvidenceCapturer | None:
@@ -432,6 +509,7 @@ class CameraPipeline:
         An operator redrawing a zone should not cost a video gap, and a
         restart would reset every track id mid-shift.
         """
+        previous = self.config
         self.config = config
         self.zone_engine.set_zones(config.zones)
         self.line_counter.set_lines(config.lines)
@@ -441,6 +519,11 @@ class CameraPipeline:
             # A settings change rebuilds the capturer; the few seconds of
             # pre-roll buffer are lost once, which a config edit can afford.
             self.evidence_capturer = self._build_evidence_capturer(config.evidence)
+        model_changed = config.product_model != previous.product_model
+        if self._product_detector_override is None and model_changed:
+            # The model was assigned, changed or cleared. Rebuild (or drop).
+            self.product_detector = self._build_product_detector(config.product_model)
+            self._last_product_run = None
 
     def prune(self, now: datetime | None = None) -> None:
         """Drop state for tracks that are long gone."""
@@ -463,6 +546,18 @@ class CameraPipeline:
             "events": self.event_engine.stats.to_dict(),
             "evidence": (
                 self.evidence_capturer.to_dict() if self.evidence_capturer is not None else None
+            ),
+            "product_model": (
+                {
+                    "model_version_id": (
+                        self.config.product_model.model_version_id
+                        if self.config.product_model
+                        else None
+                    ),
+                    **self.product_detector.stats.to_dict(),
+                }
+                if self.product_detector is not None
+                else None
             ),
             "device": self.detector.device,
             "queue_depth": self.reader.queue_depth,

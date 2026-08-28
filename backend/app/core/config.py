@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     # --------------------------------------------------------------- storage
     VIDEO_STORAGE_PATH: str = str(REPO_ROOT / "data" / "media")
     EVIDENCE_STORAGE_PATH: str = str(REPO_ROOT / "data" / "evidence")
+    MODEL_STORAGE_PATH: str = str(REPO_ROOT / "data" / "models")
     EVENT_RETENTION_DAYS: int = 90
     EVIDENCE_RETENTION_DAYS: int = 30
     SNAPSHOT_RETENTION_DAYS: int = 30
@@ -88,6 +89,16 @@ class Settings(BaseSettings):
     #: Frame rate written into the clip container (the processed rate).
     EVIDENCE_CLIP_FPS: float = 8.0
     EVIDENCE_THUMBNAIL_WIDTH: int = 320
+
+    # ---------------------------------------------------- custom models (M15)
+    #: A trained model whose mAP50 is below this cannot be activated. A model
+    #: that misses half the stock is worse than no model -- it teaches the
+    #: occupancy engine to under-count.
+    MODEL_MIN_MAP50: float = 0.30
+    #: Seconds between product-model passes on a camera that has one assigned.
+    #: The product model runs far less often than the security detector: stock
+    #: does not move frame to frame.
+    MODEL_DETECTION_INTERVAL_SECONDS: float = 5.0
 
     # ---------------------------------------------------------- maintenance
     #: Periodic sweep that deletes evidence past its ``expires_at`` and prunes
@@ -137,6 +148,7 @@ class Settings(BaseSettings):
         "YOLO_MODEL_PATH",
         "VIDEO_STORAGE_PATH",
         "EVIDENCE_STORAGE_PATH",
+        "MODEL_STORAGE_PATH",
         "EDGE_QUEUE_PATH",
         mode="after",
     )
@@ -170,7 +182,11 @@ class Settings(BaseSettings):
 
     def ensure_storage_dirs(self) -> None:
         """Create the storage directories the app writes to."""
-        for path in (self.VIDEO_STORAGE_PATH, self.EVIDENCE_STORAGE_PATH):
+        for path in (
+            self.VIDEO_STORAGE_PATH,
+            self.EVIDENCE_STORAGE_PATH,
+            self.MODEL_STORAGE_PATH,
+        ):
             Path(path).mkdir(parents=True, exist_ok=True)
 
 

@@ -6,6 +6,7 @@ from vision.pipelines.camera import (
     PipelineConfig,
     PipelineState,
     PipelineStats,
+    ProductModelConfig,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "PipelineConfig",
     "PipelineState",
     "PipelineStats",
+    "ProductModelConfig",
 ]

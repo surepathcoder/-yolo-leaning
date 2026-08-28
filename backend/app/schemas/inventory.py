@@ -226,6 +226,28 @@ class InventoryEventRead(APISchema):
     event_metadata: dict
 
 
+class ProductDetectionRead(APISchema):
+    """One product recognised by a custom model (milestone 15).
+
+    ``product_id`` is null when the model's class name does not match any
+    catalogue product's ``detection_class_name`` -- the box is still recorded,
+    it just is not linked to a SKU yet.
+    """
+
+    id: uuid.UUID
+    camera_id: uuid.UUID | None
+    shelf_id: uuid.UUID | None
+    product_id: uuid.UUID | None
+    model_version_id: uuid.UUID | None
+    class_name: str
+    confidence: float
+    bbox_x1: float
+    bbox_y1: float
+    bbox_x2: float
+    bbox_y2: float
+    detected_at: datetime
+
+
 class ShelfStatus(APISchema):
     """A shelf's latest known state, for the dashboard."""
 

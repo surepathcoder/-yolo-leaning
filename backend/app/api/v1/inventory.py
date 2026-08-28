@@ -24,6 +24,7 @@ from app.schemas.inventory import (
     InventorySnapshotRead,
     InventorySummary,
     ProductCreate,
+    ProductDetectionRead,
     ProductRead,
     ProductUpdate,
     ShelfCreate,
@@ -209,6 +210,45 @@ def list_snapshots(
     )
     return Page[InventorySnapshotRead](
         items=[InventorySnapshotRead.model_validate(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/inventory/product-detections",
+    response_model=Page[ProductDetectionRead],
+    summary="Custom-model product detections",
+)
+def list_product_detections(
+    session: DbSession,
+    scope: Scope,
+    _user: CurrentUser,
+    camera_id: uuid.UUID | None = Query(None),
+    shelf_id: uuid.UUID | None = Query(None),
+    product_id: uuid.UUID | None = Query(None),
+    since: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """What the assigned custom model has recognised, newest first.
+
+    ``product_id`` is null on a row whose class name matches no catalogue
+    product yet -- the detection is kept regardless.
+    """
+    rows, total = inventory_service.list_product_detections(
+        session,
+        scope,
+        camera_id=camera_id,
+        shelf_id=shelf_id,
+        product_id=product_id,
+        since=since,
+        limit=limit,
+        offset=offset,
+    )
+    return Page[ProductDetectionRead](
+        items=[ProductDetectionRead.model_validate(row) for row in rows],
         total=total,
         limit=limit,
         offset=offset,
