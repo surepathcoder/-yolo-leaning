@@ -25,6 +25,7 @@ frontend/.vite/
 # Data & models
 data/media/
 data/evidence/
+data/models/
 !data/samples/
 *.mp4
 *.avi
@@ -46,3 +47,6 @@ data/*.log
 
 # Runtime
 data/.dev_server.pid
+
+# Ultralytics dataset caches
+*.cache
