@@ -17,9 +17,9 @@ export default defineConfig({
     // relying on CORS, which hides same-origin cookie and header problems
     // until deployment.
     proxy: {
-      "/api": { target: "http://127.0.0.1:8000", changeOrigin: true },
-      "/ws": { target: "ws://127.0.0.1:8000", ws: true },
-      "/health": { target: "http://127.0.0.1:8000", changeOrigin: true },
+      "/api": { target: "http://127.0.0.1:8010", changeOrigin: true },
+      "/ws": { target: "ws://127.0.0.1:8010", ws: true },
+      "/health": { target: "http://127.0.0.1:8010", changeOrigin: true },
     },
   },
   build: {
